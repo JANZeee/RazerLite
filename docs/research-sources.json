@@ -1,0 +1,80 @@
+{
+  "reviewDate": "2026-10-17",
+  "sources": [
+    {
+      "repo": "Ferris-echo/FerrisPulse",
+      "sha": "57315c5d9c328518839aef140b3c4d894b85129e",
+      "reviewDate": "2026-10-18",
+      "usage": "Read-only source review; no code or assets ported; GPL-3.0 LICENSE reviewed",
+      "followUpReviews": [
+        {
+          "sha": "e0429c956ae82827cfce24bb33c85c4865070c33",
+          "commitDate": "2026-10-21T16:59:47Z",
+          "reviewDate": "2026-10-22",
+          "scope": "Planning review of README, FDAS specification, FdasRuntimeHelper.cs and ImportAdapterDialog.cs; raw sources fetched read-only, no upstream code executed or ported; not a full audit",
+          "document": "docs/NEXT_DEVELOPMENT_PLAN.md"
+        },
+        {
+          "sha": "49c92f22aacd5fe83fd91ca680e4ca422cfd41a4",
+          "commitDate": "2026-10-18T12:59:26Z",
+          "reviewDate": "2026-10-18",
+          "scope": "Bluetooth OS telemetry, Razer query/write paths, identity, scheduling, state locks and tests; fetched and read via git show/diff only",
+          "document": "docs/FERRISPULSE_REVIEW.md"
+        }
+      ]
+    },
+    {
+      "repo": "OpenMouse-Project/mouse-protocol",
+      "sha": "54c68c69bbd0bcd750cf10a4e439148e634c02db",
+      "date": "2026-10-17T07:57:09Z"
+    },
+    {
+      "repo": "openrazer/openrazer",
+      "sha": "477f4d6d3ab7e9deb6310d5bd3742560c5cbe80d",
+      "date": "2026-10-05T18:47:26Z"
+    },
+    {
+      "repo": "polychromatic/polychromatic",
+      "sha": "736774f5d0b7aee56cc02729e271802f6fd00e87",
+      "date": "2026-10-06T21:12:16Z"
+    },
+    {
+      "repo": "libratbag/libratbag",
+      "sha": "8235b5bb6032dea15901ab58a8218956f4494d08",
+      "date": "2026-09-17T12:56:39Z"
+    },
+    {
+      "repo": "1kc/razer-macos",
+      "sha": "27f8a770611c4d68d0387a980e55b79711a343f3",
+      "date": "2022-09-22T13:38:44Z"
+    },
+    {
+      "url": "https://github.com/openrazer/openrazer/pull/2912",
+      "state": "open",
+      "merged": false,
+      "headSHA": "54f9f686ba8c2162a1232c85f98486f4810a258e",
+      "updatedAt": "2026-09-12T18:04:01Z"
+    },
+    {
+      "url": "https://github.com/openrazer/openrazer/pull/2943",
+      "state": "open",
+      "merged": false,
+      "headSHA": "94e4ef647dc7b7ce8accc31ec89d08517ba24b38",
+      "updatedAt": "2026-10-09T15:40:57Z"
+    },
+    {
+      "url": "https://github.com/openrazer/openrazer/issues/2760#issuecomment-4933462400",
+      "attachment": "https://github.com/user-attachments/files/29881488/viper-v4-pro-openrazer-2760-2026-07-10.zip",
+      "sha256": "746a881e02604cab1145ca6cbe1c7165720a102cb7bd62aad17b867dd9fc3411",
+      "verifiedFileHashes": 14
+    }
+  ],
+  "dpiWriteReviewDate": "2026-10-18",
+  "profileReviewDate": "2026-10-18",
+  "pollingReadReviewDate": "2026-10-19",
+  "chargingReadReviewDate": "2026-10-19",
+  "chargingReadReviewDocument": "docs/PHASE07_CHARGING_READ.md",
+  "keyboardPowerReadReviewDate": "2026-10-19",
+  "keyboardPowerReadReviewSHA": "54f9f686ba8c2162a1232c85f98486f4810a258e",
+  "keyboardPowerReadReviewDocument": "docs/PHASE08_KEYBOARD_POWER.md"
+}

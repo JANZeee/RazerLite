@@ -1,0 +1,15 @@
+.build/
+build/
+.research/
+.DS_Store
+.swiftpm/
+*.xcuserstate
+
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.mobileprovision
