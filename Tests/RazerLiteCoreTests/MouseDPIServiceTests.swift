@@ -47,6 +47,74 @@ struct MouseDPIServiceTests {
     }
     private func service(_ bus: DPIBus) -> MouseDPIService { MouseDPIService { _ in try bus.open() } }
 
+    @Test func multipleStageEditsUseOneWriteAndVerifyWholeTable() async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        var target = baseline
+        target.replaceSubrange(4...7, with: [3, 0xE8, 3, 0xE8])
+        target.replaceSubrange(11...14, with: [7, 0xD0, 9, 0xC4])
+        let bus = DPIBus([[response(baseline)], [response(baseline), acknowledgement(), response(target)]])
+        let controller = service(bus)
+        let plan = try await controller.prepareStages(device, baseline: before, changes: [
+            .init(stage: 1, x: 1000, y: 1000), .init(stage: 2, x: 2000, y: 2500)
+        ])
+        #expect(plan.changedStages == [1, 2])
+        #expect(plan.after.activeStage == before.activeStage)
+        #expect(bus.snapshot().0.map { $0[7] } == [0x86])
+        let result = await controller.apply(plan)
+        #expect(result.outcome == .verified && result.readback == plan.after)
+        let frames = bus.snapshot().0
+        #expect(frames.map { $0[7] } == [0x86, 0x86, 6, 0x86])
+        #expect(Array(frames[2][11..<25]) == [0, 3, 0xE8, 3, 0xE8, 0, 0, 1, 7, 0xD0, 9, 0xC4, 0, 0])
+        #expect(await controller.apply(plan).outcome == .notSent)
+        #expect(bus.snapshot().0.count == 4)
+    }
+
+    @Test func editsToInactiveStagePreserveUnroundedOtherValues() throws {
+        let before = MouseDPIState(activeStage: 2, stages: [.init(x: 800, y: 800), .init(x: 2846, y: 6073)])
+        let after = try ViperV4DPIProtocol.replacingStages(in: before, changes: [.init(stage: 1, x: 1600, y: 2000)])
+        #expect(after.current == before.current)
+        #expect(after.activeStage == 2 && after.stages.count == 2)
+        #expect(after.stages[0] == MouseDPIStage(x: 1600, y: 2000))
+    }
+
+    @Test func invalidBatchEditsAreRejectedBeforeOpeningTransport() async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        let bus = DPIBus([])
+        let batches: [[MouseDPIStageChange]] = [[], [.init(stage: 0, x: 800, y: 800)],
+            [.init(stage: 3, x: 800, y: 800)], [.init(stage: 1, x: 2846, y: 800)],
+            [.init(stage: 1, x: 800, y: 800)],
+            [.init(stage: 1, x: 1000, y: 1000), .init(stage: 1, x: 1200, y: 1200)]]
+        for changes in batches {
+            await #expect(throws: MouseQueryError.self) { try await service(bus).prepareStages(device, baseline: before, changes: changes) }
+        }
+        #expect(bus.snapshot().0.isEmpty && bus.snapshot().1 == 0)
+    }
+
+    @Test func staleDraftAndUnknownLayoutNeverCreateBatchPlan() async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        var shifted = baseline; shifted[1] = 1
+        var metadata = baseline; metadata[8] = 1
+        for payload in [targetPayload(), shifted, metadata] {
+            let bus = DPIBus([[response(payload)]])
+            await #expect(throws: MouseQueryError.self) {
+                try await service(bus).prepareStages(device, baseline: before, changes: [.init(stage: 1, x: 1000, y: 1000)])
+            }
+            #expect(bus.snapshot().0.map { $0[7] } == [0x86])
+            #expect(bus.snapshot().1 == 1)
+        }
+    }
+
+    @Test func batchReadbackMismatchIsUncertainWithoutRetry() async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        let bus = DPIBus([[response(baseline)], [response(baseline), acknowledgement(), response(baseline)]])
+        let controller = service(bus)
+        let plan = try await controller.prepareStages(device, baseline: before, changes: [.init(stage: 1, x: 1000, y: 1000)])
+        let result = await controller.apply(plan)
+        #expect(result.outcome == .uncertain && result.attemptedWrite)
+        #expect(result.readback == before)
+        #expect(bus.snapshot().0.filter { $0[7] == 6 }.count == 1)
+    }
+
     @Test func encodingChangesOnlyCurrentValuesWithKnownStorageAndChecksum() throws {
         let before = try ViperV4DPIProtocol.writableBaseline(baseline)
         let after = try ViperV4DPIProtocol.replacingCurrent(in: before, x: 1000, y: 1500)

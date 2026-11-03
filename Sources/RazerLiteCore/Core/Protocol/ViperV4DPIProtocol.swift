@@ -33,6 +33,25 @@ enum ViperV4DPIProtocol {
         return MouseDPIState(activeStage: baseline.activeStage, stages: stages)
     }
 
+    static func replacingStages(in baseline: MouseDPIState, changes: [MouseDPIStageChange]) throws -> MouseDPIState {
+        guard (1...5).contains(baseline.stages.count), (1...baseline.stages.count).contains(baseline.activeStage),
+              !changes.isEmpty, Set(changes.map(\.stage)).count == changes.count else {
+            throw MouseQueryError.malformed("请选择已有档位，不能提交空变更或重复档位")
+        }
+        var stages = baseline.stages
+        for change in changes {
+            guard (1...stages.count).contains(change.stage) else {
+                throw MouseQueryError.malformed("目标档位不在设备当前档位表中")
+            }
+            try validateTarget(x: change.x, y: change.y)
+            stages[change.stage - 1] = MouseDPIStage(x: change.x, y: change.y)
+        }
+        // Unedited values, including non-rounded firmware values, stay exact.
+        let result = MouseDPIState(activeStage: baseline.activeStage, stages: stages)
+        guard result != baseline else { throw MouseQueryError.malformed("目标值与设备相同，无需写入") }
+        return result
+    }
+
     static func request(_ state: MouseDPIState) -> [UInt8] {
         var frame = ViperV4ReadProtocol.request(.dpiStages)
         frame[5] = UInt8(3 + state.stages.count * 7)

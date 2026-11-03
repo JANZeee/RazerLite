@@ -11,6 +11,42 @@ struct OfflineScenarioTests {
         return try decoder.decode(DiagnosticSnapshot.self, from: session.manager.snapshotData())
     }
 
+    @Test func batchChangesStayIsolatedAndRejectAnOldDraft() async throws {
+        let session = try OfflineScenarioSession()
+        await session.load(.twinMice)
+        let first = session.manager.devices[0], second = session.manager.devices[1]
+        let baseline = try #require(session.manager.mouseReadouts[first.id]?.dpi)
+        let other = session.manager.mouseReadouts[second.id]?.dpi
+        let changes = [MouseDPIStageChange(stage: 1, x: 1000, y: 1200),
+                       MouseDPIStageChange(stage: 3, x: 3200, y: 3400)]
+        await session.manager.prepareDPIStages(for: first.id, baseline: baseline, changes: changes)
+        let plan = try #require(session.manager.pendingDPIChanges[first.id])
+        #expect(plan.changedStages == [1, 3])
+        await session.manager.confirmDPIChange(for: first.id, planID: plan.id)
+        await session.manager.confirmDPIChange(for: first.id, planID: plan.id)
+        #expect(session.manager.mouseReadouts[first.id]?.dpi == plan.after)
+        #expect(session.manager.mouseReadouts[second.id]?.dpi == other)
+        #expect((await session.services.operations).filter { $0.hasPrefix("apply:") }.count == 1)
+        await session.manager.prepareDPIStages(for: first.id, baseline: baseline, changes: changes)
+        #expect(session.manager.pendingDPIChanges[first.id] == nil)
+        #expect(session.manager.dpiErrors[first.id] != nil)
+    }
+
+    @Test func batchConfirmationIsRevokedDuringSleep() async throws {
+        let session = try OfflineScenarioSession()
+        await session.load(.mouse)
+        let id = try #require(session.manager.devices.first?.id)
+        let baseline = try #require(session.manager.mouseReadouts[id]?.dpi)
+        await session.manager.prepareDPIStages(for: id, baseline: baseline,
+            changes: [MouseDPIStageChange(stage: 1, x: 1000, y: 1200)])
+        let plan = try #require(session.manager.pendingDPIChanges[id])
+        session.manager.suspend()
+        session.manager.resume()
+        await session.manager.confirmDPIChange(for: id, planID: plan.id)
+        #expect(session.manager.pendingDPIChanges[id] == nil)
+        #expect(!(await session.services.operations).contains { $0.hasPrefix("apply:") })
+    }
+
     @Test func allScenariosUseSyntheticDiagnosticsAndIsolatedStorage() async throws {
         let first = try OfflineScenarioSession()
         let second = try OfflineScenarioSession()

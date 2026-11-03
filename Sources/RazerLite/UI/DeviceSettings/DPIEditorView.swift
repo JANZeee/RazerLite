@@ -27,7 +27,7 @@ struct DPIEditorView: View {
         SurfaceCard {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    Label("设置当前档位", systemImage: "slider.horizontal.3").font(.system(size: 13, weight: .medium))
+                    Label("DPI 设置", systemImage: "slider.horizontal.3").font(.system(size: 13, weight: .medium))
                     Spacer()
                     SmallBadge(title: manager.dpiWriteResults[device.id]?.outcome == .verified
                                ? manager.isSimulation ? "模拟读回" : "读回已验证" : "需确认")
@@ -43,7 +43,7 @@ struct DPIEditorView: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(RazerTheme(scheme: scheme).accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
                 }
-                Text("先检查变更，确认后写入并读回验证。")
+                Text("修改当前档位，或展开下方编辑全部档位。")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 18) {
                     axisField("X 轴 DPI", text: $editor.x)
@@ -59,6 +59,8 @@ struct DPIEditorView: View {
                     .help("设备原值可能不符合输入步进，不会自动取整")
                 Label("会提交全部档位，可能保存到设备。", systemImage: "exclamationmark.circle")
                     .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Divider()
+                DPIStagesEditorView(device: device, manager: manager, busy: busy)
                 if let error = manager.dpiErrors[device.id] {
                     Text(error).font(.system(size: 11)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
@@ -118,7 +120,7 @@ struct DPIConfirmationView: View {
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.orange)
             }
             Text(plan.deviceName).font(.system(size: 12)).foregroundStyle(.secondary)
-            Text("仅修改第 \(plan.before.activeStage) 档的 X/Y 数值。底层命令会提交全部 \(plan.before.stages.count) 档；可能保存到设备，不能保证临时生效。")
+            Text("修改第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档的 X/Y 数值，保持当前档位不变。底层命令会提交全部 \(plan.before.stages.count) 档；可能保存到设备，不能保证临时生效。")
                 .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 12) {
                 HStack {
@@ -134,7 +136,8 @@ struct DPIConfirmationView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("\(plan.after.stages[index].x) / \(plan.after.stages[index].y)")
                             .frame(maxWidth: .infinity, alignment: .leading)
-                    }.font(.system(size: 12, weight: index + 1 == plan.before.activeStage ? .semibold : .regular, design: .monospaced))
+                    }.font(.system(size: 12, weight: plan.changedStages.contains(index + 1) ? .semibold : .regular, design: .monospaced))
+                        .foregroundStyle(plan.changedStages.contains(index + 1) ? Color.primary : Color.secondary)
                 }
             }.padding(17).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 12))
             Text("计划有效期 60 秒。写入前会再次读取；设备、当前档位或表内数值有变化即中止。失败后不自动重试或回滚。这是实验性设备写入；保存与跨重启行为尚待验证。")

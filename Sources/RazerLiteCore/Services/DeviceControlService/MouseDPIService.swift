@@ -1,5 +1,13 @@
 import Foundation
 
+/// One-based existing stage; does not change the active stage or stage count.
+public struct MouseDPIStageChange: Equatable, Sendable {
+    public let stage: Int
+    public let x: Int
+    public let y: Int
+    public init(stage: Int, x: Int, y: Int) { self.stage = stage; self.x = x; self.y = y }
+}
+
 /// Only an issued, uncancelled plan can grant a single write attempt.
 final class DPIWritePermit: @unchecked Sendable {
     private let lock = NSLock()
@@ -25,6 +33,9 @@ public struct MouseDPIPlan: Identifiable, Sendable {
     let interface: HIDInterface
     let issuedAt: ContinuousClock.Instant
     let permit = DPIWritePermit()
+    public var changedStages: [Int] {
+        before.stages.indices.filter { before.stages[$0] != after.stages[$0] }.map { $0 + 1 }
+    }
     var isUsable: Bool { permit.isUsable && issuedAt.duration(to: .now) < .seconds(60) }
     func invalidate() { permit.invalidate() }
 }
@@ -47,7 +58,14 @@ public struct MouseDPIWriteResult: Codable, Sendable {
 
 public protocol MouseDPIControlling: Sendable {
     func prepare(_ device: DeviceInfo, x: Int, y: Int) async throws -> MouseDPIPlan
+    func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan
     func apply(_ plan: MouseDPIPlan) async -> MouseDPIWriteResult
+}
+
+public extension MouseDPIControlling {
+    func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan {
+        throw DeviceQueryError.malformed("当前控制服务尚未实现多档位编辑")
+    }
 }
 
 /// Preparation is read-only; apply is reserved for the explicit confirmation button.
@@ -59,6 +77,22 @@ public final class MouseDPIService: MouseDPIControlling, Sendable {
 
     public func prepare(_ device: DeviceInfo, x: Int, y: Int) async throws -> MouseDPIPlan {
         try ViperV4DPIProtocol.validateTarget(x: x, y: y)
+        return try await prepare(device) { before in
+            try ViperV4DPIProtocol.replacingCurrent(in: before, x: x, y: y)
+        }
+    }
+
+    public func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan {
+        let after = try ViperV4DPIProtocol.replacingStages(in: baseline, changes: changes)
+        return try await prepare(device) { fresh in
+            guard fresh == baseline else {
+                throw MouseQueryError.malformed("设备档位已变化，请重新读取并载入设备值后编辑")
+            }
+            return after
+        }
+    }
+
+    private func prepare(_ device: DeviceInfo, transform: @escaping @Sendable (MouseDPIState) throws -> MouseDPIState) async throws -> MouseDPIPlan {
         return try await withCheckedThrowingContinuation { continuation in
             HIDOperationExecutor.queue.async {
                 do {
@@ -66,8 +100,8 @@ public final class MouseDPIService: MouseDPIControlling, Sendable {
                     let transport = try self.factory(interface)
                     defer { transport.close() }
                     let before = try ViperV4DPIProtocol.writableBaseline(ViperV4ControlClient(transport: transport).query(.dpiStages))
-                    let after = try ViperV4DPIProtocol.replacingCurrent(in: before, x: x, y: y)
-                    guard before != after else { throw MouseQueryError.malformed("目标值与当前档位相同，无需写入") }
+                    let after = try transform(before)
+                    guard before != after else { throw MouseQueryError.malformed("目标值与设备相同，无需写入") }
                     continuation.resume(returning: MouseDPIPlan(deviceID: device.id, deviceName: device.product,
                                                                 before: before, after: after, interface: interface, issuedAt: .now))
                 } catch { continuation.resume(throwing: error) }

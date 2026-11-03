@@ -20,6 +20,12 @@
           "reviewDate": "2026-10-18",
           "scope": "Bluetooth OS telemetry, Razer query/write paths, identity, scheduling, state locks and tests; fetched and read via git show/diff only",
           "document": "docs/FERRISPULSE_REVIEW.md"
+        },
+        {
+          "sha": "e565b0d3e3cae2f87068651b1c0f7a8435d5a2f3",
+          "reviewDate": "2026-11-03",
+          "scope": "Read-only review of RazerDeviceHelper.cs, HardwareCommandBus.cs, DpiManagementDialog.cs and test_razer_dpi_protocol.ps1; existing stage table validation and UI flow; no upstream code executed or copied; Windows transport is not macOS compatibility evidence",
+          "document": "docs/PHASE011_DPI_STAGES.md"
         }
       ]
     },

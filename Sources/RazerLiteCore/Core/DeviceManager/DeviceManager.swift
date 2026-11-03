@@ -343,6 +343,18 @@ public final class DeviceManager: ObservableObject {
     }
 
     public func prepareDPIChange(for deviceID: String, x: Int, y: Int) async {
+        await prepareDPIChange(for: deviceID) { [dpiController] device in
+            try await dpiController.prepare(device, x: x, y: y)
+        }
+    }
+
+    public func prepareDPIStages(for deviceID: String, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async {
+        await prepareDPIChange(for: deviceID) { [dpiController] device in
+            try await dpiController.prepareStages(device, baseline: baseline, changes: changes)
+        }
+    }
+
+    private func prepareDPIChange(for deviceID: String, prepare: (DeviceInfo) async throws -> MouseDPIPlan) async {
         guard isMonitoring, !isSuspended, !operations.isBusy(deviceID),
               dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil,
               let device = devices.first(where: { $0.id == deviceID }),
@@ -359,7 +371,7 @@ public final class DeviceManager: ObservableObject {
         mouseReadouts.removeValue(forKey: deviceID)
         mouseReadingInterfaces.removeValue(forKey: deviceID)
         do {
-            let plan = try await dpiController.prepare(device, x: x, y: y)
+            let plan = try await prepare(device)
             guard isMonitoring, !Task.isCancelled, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else {
                 plan.invalidate()
                 if dpiRequests[deviceID]?.token == token { dpiRequests.removeValue(forKey: deviceID); dpiBusyIDs.remove(deviceID) }
@@ -406,7 +418,7 @@ public final class DeviceManager: ObservableObject {
         chargingReadouts.removeValue(forKey: deviceID)
         chargingReadingInterfaces.removeValue(forKey: deviceID)
         hasConfirmedDPIWrite = true
-        record("用户确认 \(plan.deviceName) 第 \(plan.before.activeStage) 档 DPI → X \(plan.after.current.x) / Y \(plan.after.current.y)。")
+        record("用户确认 \(plan.deviceName) 第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档 DPI 变更；提交完整表并读回。")
         let result = await dpiController.apply(plan)
         guard isMonitoring, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
         dpiRequests.removeValue(forKey: deviceID)
