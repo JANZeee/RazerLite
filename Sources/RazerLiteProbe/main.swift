@@ -7,12 +7,13 @@ struct RazerLiteProbe {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("--help") {
-            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取 Viper V4 Pro 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 试读 1532:02D2 键盘电量，macOS 真机兼容性待验证。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
+            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-battery 独立读取 Viper V4 Pro 电量，不查询 DPI、充电或修改设置。\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取 Viper V4 Pro 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 试读 1532:02D2 键盘电量，macOS 真机兼容性待验证。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
             return
         }
         var duration = 0.0
         var all = false
         var readMouse = false
+        var readBattery = false
         var readSystemBattery = false
         var readPolling = false
         var readCharging = false
@@ -24,6 +25,7 @@ struct RazerLiteProbe {
             switch args[index] {
             case "--all": all = true
             case "--read-mouse": readMouse = true
+            case "--read-battery": readBattery = true
             case "--read-system-battery": readSystemBattery = true
             case "--read-polling-rate": readPolling = true
             case "--read-charging": readCharging = true
@@ -42,7 +44,7 @@ struct RazerLiteProbe {
             }
             index += 1
         }
-        let readCount = [readMouse, readSystemBattery, readPolling, readCharging, readKeyboardBattery, readKeyboardCharging].filter { $0 }.count
+        let readCount = [readMouse, readBattery, readSystemBattery, readPolling, readCharging, readKeyboardBattery, readKeyboardCharging].filter { $0 }.count
         if readCount > 1 { fail("请一次选择一个读取后端。") }
         if readCount > 0 && duration > 0 { fail("读取选项与 --watch 不能组合；读取为单次显式操作。") }
         if selectedID != nil && readCount == 0 { fail("--device-id 仅用于读取选项。") }
@@ -59,6 +61,7 @@ struct RazerLiteProbe {
         stderr("discoveryReady=\(started.duration(to: .now)); interfaces=\(records.count)")
         if duration > 0 { watch(for: duration) }
         var readouts: [String: MouseTelemetry] = [:]
+        var batteryReadouts: [String: BatteryReading] = [:]
         var systemBatteries: [String: SystemBatteryReading] = [:]
         var pollingReadouts: [String: MousePollingReading] = [:]
         var chargingReadouts: [String: MouseChargingReading] = [:]
@@ -90,6 +93,28 @@ struct RazerLiteProbe {
             queryFailed = !reading.hasValue
             if let issue = reading.issue { stderr("\(issue.kind?.title ?? "读取失败")：\(issue.message)") }
         }
+        if readBattery {
+            let candidates = DeviceInfo.group(records).filter {
+                DeviceReadRegistry.backends(for: $0).contains(.viperV4USB) && (selectedID == nil || $0.id == selectedID)
+            }
+            guard candidates.count == 1, let device = candidates.first else {
+                fail("未找到唯一可独立读取电量的 Viper V4 Pro；多台设备请用 --device-id 指定。")
+            }
+            var reading: BatteryReading?
+            Task { @MainActor in
+                reading = await ViperBatteryReadService().read(device)
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+            CFRunLoopRun()
+            guard let reading else { fail("电量读取未返回结果。") }
+            discovery.refresh()
+            guard let current = DeviceInfo.group(records).first(where: { $0.id == device.id }), current == device else {
+                fail("读取期间设备已变化，未导出旧状态。")
+            }
+            batteryReadouts[device.id] = reading
+            queryFailed = !reading.isValid
+            if let issue = reading.issue { stderr("\(issue.kind?.title ?? "读取失败")：\(issue.message)") }
+        }
         if readMouse {
             let candidates = DeviceInfo.group(records).filter {
                 MouseReadService.canRead($0) && (selectedID == nil || $0.id == selectedID)
@@ -99,6 +124,10 @@ struct RazerLiteProbe {
             }
             stderr("手动查询：\(device.product)，仅电量与 DPI。")
             let reading = readOnce(device)
+            discovery.refresh()
+            guard let current = DeviceInfo.group(records).first(where: { $0.id == device.id }), current == device else {
+                fail("读取期间设备已变化，未导出旧状态。")
+            }
             readouts[device.id] = reading
             queryFailed = !reading.isComplete
             for issue in reading.issues { stderr("\(issue.field): \(issue.message)") }
@@ -171,7 +200,7 @@ struct RazerLiteProbe {
             if let issue = reading.issue { stderr(issue) }
         }
         do {
-            FileHandle.standardOutput.write(try DiagnosticSnapshot(interfaces: records, mouseReadouts: readouts,
+            FileHandle.standardOutput.write(try DiagnosticSnapshot(interfaces: records, batteryReadouts: batteryReadouts, mouseReadouts: readouts,
                                                                   systemBatteryReadings: systemBatteries,
                                                                   pollingReadouts: pollingReadouts,
                                                                   chargingReadouts: chargingReadouts,

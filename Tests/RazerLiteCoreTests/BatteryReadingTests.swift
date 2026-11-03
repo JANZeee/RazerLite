@@ -35,6 +35,39 @@ private actor BatteryGate: BatteryReadingService {
 
 @Suite(.timeLimit(.minutes(1)))
 struct BatteryReadingTests {
+    @Test func standaloneBatteryDiagnosticsDescribeActualBackendEvenOnFailure() throws {
+        for backend in [DeviceReadBackend.viperV4USB, .blackWidowLowProfileUSB, .macOSBluetoothBattery] {
+            for failed in [false, true] {
+                let reading = BatteryReading(deviceID: "fixture", interfaceIDs: [1], backend: backend,
+                    percent: failed ? nil : 0, acquiredAt: Date(timeIntervalSince1970: 1000),
+                    source: backend == .macOSBluetoothBattery ? .systemCache : .device,
+                    issue: failed ? .init(field: "battery", message: "fixture timeout", kind: .timeout) : nil)
+                let snapshot = DiagnosticSnapshot(interfaces: [], batteryReadouts: ["fixture": reading])
+                let expected = backend == .macOSBluetoothBattery
+                    ? "system-metadata-read; no feature queries requested" : "manual-status-queries; no setting commands"
+                #expect(snapshot.mode == expected)
+                let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+                let decoded = try decoder.decode(DiagnosticSnapshot.self, from: snapshot.jsonData())
+                #expect(decoded.mode == expected)
+                #expect(decoded.batteryReadouts?["fixture"] == reading)
+            }
+        }
+    }
+
+    @Test func batteryDiagnosticModesPreserveOperationPriorityAndEmptyDefaults() {
+        func reading(_ backend: DeviceReadBackend) -> BatteryReading {
+            .init(deviceID: "fixture", interfaceIDs: [], backend: backend, percent: 50,
+                  acquiredAt: .now, source: backend == .macOSBluetoothBattery ? .systemCache : .device, issue: nil)
+        }
+        let values = ["usb": reading(.viperV4USB), "bluetooth": reading(.macOSBluetoothBattery)]
+        #expect(DiagnosticSnapshot(interfaces: [], batteryReadouts: values).mode == "manual-status-queries; no setting commands")
+        #expect(DiagnosticSnapshot(interfaces: [], batteryReadouts: values, automaticBatteryRequested: true).mode == "opt-in-battery-and-manual-reads; no setting commands")
+        #expect(DiagnosticSnapshot(interfaces: [], batteryReadouts: values, settingRequested: true).mode.hasPrefix("manual-device-operations"))
+        #expect(DiagnosticSnapshot(interfaces: [], batteryReadouts: values, simulation: true).mode == "simulation-only; no device communication")
+        #expect(DiagnosticSnapshot(interfaces: []).mode == "discovery-only; no feature queries requested")
+        #expect(DiagnosticSnapshot(interfaces: [], queriesRequested: true).mode == "manual-status-queries; no setting commands")
+    }
+
     @Test func viperBatteryOnlySendsOneReviewedGetAndClosesWithoutDPIOrCharging() async {
         let device = DeviceInfo.group([MouseReadServiceTests().controlInterface()])[0]
         let transport = BatteryFeatureFixture(ViperReadProtocolTests().response(.battery, payload: [0, 0]))

@@ -35,7 +35,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
                 queriesRequested: Bool = false, systemMetadataRequested: Bool = false,
                 automaticBatteryRequested: Bool = false, settingRequested: Bool = false, simulation: Bool = false) {
         schemaVersion = 10
-        applicationVersion = "0.11.2-device-identity"
+        applicationVersion = "0.11.3-read-validation"
         generatedAt = Date()
         operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
         dataOrigin = simulation ? "synthetic-development-fixtures; not hardware evidence" : nil
@@ -43,8 +43,10 @@ public struct DiagnosticSnapshot: Codable, Sendable {
             : settingRequested || !dpiWriteResults.isEmpty || !pollingWriteResults.isEmpty ? "manual-device-operations; see dpiWriteResults and pollingWriteResults when complete"
             : automaticBatteryRequested ? "opt-in-battery-and-manual-reads; no setting commands"
             : queriesRequested || !mouseReadouts.isEmpty || !pollingReadouts.isEmpty || !chargingReadouts.isEmpty
-                || !keyboardBatteryReadouts.isEmpty || !keyboardChargingReadouts.isEmpty ? "manual-status-queries; no setting commands"
-            : systemMetadataRequested || !systemBatteryReadings.isEmpty ? "system-metadata-read; no feature queries requested"
+                || !keyboardBatteryReadouts.isEmpty || !keyboardChargingReadouts.isEmpty
+                || batteryReadouts.values.contains(where: { $0.backend != .macOSBluetoothBattery }) ? "manual-status-queries; no setting commands"
+            : systemMetadataRequested || !systemBatteryReadings.isEmpty
+                || !batteryReadouts.isEmpty ? "system-metadata-read; no feature queries requested"
             : "discovery-only; no feature queries requested"
         devices = DeviceInfo.group(interfaces)
         self.mouseReadouts = mouseReadouts.isEmpty ? nil : mouseReadouts

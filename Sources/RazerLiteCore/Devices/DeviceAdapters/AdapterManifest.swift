@@ -103,13 +103,13 @@ public enum AdapterManifestCatalog {
         sources: [.init(url: URL(string: "https://github.com/OpenMouse-Project/mouse-protocol/blob/54c68c69bbd0bcd750cf10a4e439148e634c02db/src/drivers/razer/viper-v4-pro-hid.ts")!,
                         revision: "54c68c69bbd0bcd750cf10a4e439148e634c02db", scope: "00E6 查询、DPI 与充电协议依据；非其他连接方式的保证")],
         features: [
-            feature("battery", .hardwareValidated, "历史本机 00E6 USB 电量读回；0.10.2 独立电量会话与自动刷新仍待真机验收，当前设备及固件不继承历史结论。", ["docs/READ_ONLY_PROTOCOL.md", "docs/PHASE0102_BATTERY.md"], samples: ["Tests/RazerLiteCoreTests/ViperReadProtocolTests.swift", "Tests/RazerLiteCoreTests/BatteryReadingTests.swift"]),
+            feature("battery", .hardwareValidated, "本机 00E6 USB 电量及独立电量会话已有读回记录；自动刷新与长期稳定性未验收，其他设备及固件不继承结论。", ["docs/READ_ONLY_PROTOCOL.md", "docs/PHASE0102_BATTERY.md", "docs/PHASE0113_READ_VALIDATION.md"], samples: ["Tests/RazerLiteCoreTests/ViperReadProtocolTests.swift", "Tests/RazerLiteCoreTests/BatteryReadingTests.swift"]),
             feature("dpi", .hardwareValidated, "历史本机 X/Y DPI 读回。", ["docs/READ_ONLY_PROTOCOL.md"], samples: ["Tests/RazerLiteCoreTests/ViperReadProtocolTests.swift"]),
             feature("stages", .hardwareValidated, "历史本机全部 DPI 档位读回。", ["docs/READ_ONLY_PROTOCOL.md"], samples: ["Tests/RazerLiteCoreTests/ViperReadProtocolTests.swift"]),
             feature("dpiWrite", .hardwareValidated, "历史当前档位 X/Y 修改有一次明确授权写入与完整读回记录；0.11.0 多档修改仅模拟通过，待真机验收。跨重启持久性未确认。", ["docs/DPI_WRITE.md", "docs/PHASE011_DPI_STAGES.md"], samples: ["Tests/RazerLiteCoreTests/MouseDPIServiceTests.swift"]),
             feature("pollingWrite", .simulationTested, "00E6 USB 专用命令与模拟协议通过；设置尚未真机验证，RF 重配可能短暂影响连接。", ["docs/PHASE0111_POLLING_CONTROL.md"], samples: ["Tests/RazerLiteCoreTests/PollingRateControlTests.swift"]),
             feature("polling", .hardwareValidated, "历史本机回报率配置读回，不是实际输入频率。", ["docs/PHASE06_PROTOCOL_REVIEW.md"], samples: ["Tests/RazerLiteCoreTests/PollingRateReadServiceTests.swift"]),
-            feature("charging", .simulationTested, "抓包与协议测试通过；本机充电查询待验收。", ["docs/PHASE07_CHARGING_READ.md"], samples: ["Tests/RazerLiteCoreTests/ChargingReadServiceTests.swift"]),
+            feature("charging", .hardwareValidated, "本机 00E6 USB 查询曾返回未充电；充电中、状态切换和断连重连未验收，不证明电缆连接或持续在线。", ["docs/PHASE07_CHARGING_READ.md", "docs/PHASE0113_READ_VALIDATION.md"], samples: ["Tests/RazerLiteCoreTests/ChargingReadServiceTests.swift"]),
             feature("localProfiles", .softwareTested, "本地 DPI 档案；选择不修改设备。", ["docs/PHASE091_LOCAL_LIBRARY.md"])
         ])
 
