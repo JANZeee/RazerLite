@@ -38,7 +38,7 @@ struct DeviceListView: View {
                 DeviceDetailView(device: device, manager: manager, profiles: profiles, workspace: workspace).id(device.id)
             } else {
                 DeviceEmptyState(hasDevices: !manager.physicalDevices.isEmpty,
-                    onBrowse: { workspace.section = .catalog }, onCheck: { state.showsConnectionCheck = true })
+                    onCheck: { state.showsConnectionCheck = true })
             }
         }
         .frame(minWidth: 960, minHeight: manager.isSimulation ? 560 : 640)
@@ -56,6 +56,12 @@ struct DeviceListView: View {
                     }
                 } label: { Label("更多", systemImage: "ellipsis.circle") }
                     .help("更多操作")
+            }
+        }
+        .onReceive(workspace.$requestsConnectionCheck) { requested in
+            if requested {
+                state.showsConnectionCheck = true
+                workspace.requestsConnectionCheck = false
             }
         }
         .onReceive(manager.$devices) { devices in
@@ -164,7 +170,6 @@ struct DeviceSidebarContent: View {
 
 private struct DeviceEmptyState: View {
     let hasDevices: Bool
-    let onBrowse: () -> Void
     let onCheck: () -> Void
     @Environment(\.colorScheme) private var scheme
     private var theme: RazerTheme { RazerTheme(scheme: scheme) }
@@ -187,7 +192,6 @@ private struct DeviceEmptyState: View {
             if !hasDevices {
                 HStack(spacing: 12) {
                     Button(action: onCheck) { Label("检查连接", systemImage: "stethoscope") }
-                    Button(action: onBrowse) { Label("浏览设备目录", systemImage: "square.grid.2x2") }
                 }.buttonStyle(.bordered).controlSize(.large).padding(.top, 25)
             }
         }

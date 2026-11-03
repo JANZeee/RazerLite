@@ -14,47 +14,20 @@ struct MenuBarView: View {
             Menu(deviceTitle(device)) {
                 Text("连接：\(device.transport)")
                 Text(manager.adapterAssessment(for: device).readingSummary)
-                ForEach(manager.adapterAssessment(for: device).capabilities.filter { $0.session.previous != nil }) { capability in
-                    if let previous = capability.session.previous {
-                        Text("上次成功 · \(capability.title)：\(previous.value)")
-                        Text("\(previous.at.formatted(date: .abbreviated, time: .standard)) · \(previous.source)")
-                    }
-                }
                 if let battery = batterySummary(device) {
                     Text("电量：\(battery.percent)% · \(battery.source)")
-                    Text("取得于 \(battery.acquiredAt.formatted(date: .abbreviated, time: .standard))")
+                    Text("取得于 \(battery.acquiredAt.formatted(date: .abbreviated, time: .shortened))")
+                } else if let previous = manager.adapterAssessment(for: device).capabilities
+                    .first(where: { $0.id == "battery" })?.session.previous {
+                    Text("上次电量：\(previous.value) · 历史值")
+                    Text("\(previous.at.formatted(date: .abbreviated, time: .shortened)) · \(previous.source)")
                 } else {
                     Text("电量未取得")
                 }
-                if let reading = manager.mouseReadouts[device.id], reading.issues.contains(where: { manager.batteryReadouts[device.id] == nil || $0.field != "battery" }) {
-                    Text("尝试于 \(reading.readAt.formatted(date: .abbreviated, time: .standard))")
-                    ForEach(Array(reading.issues.filter { manager.batteryReadouts[device.id] == nil || $0.field != "battery" }.enumerated()), id: \.offset) { _, issue in Text(issue.message) }
-                }
-                if let reading = manager.keyboardBatteryReadouts[device.id], !reading.hasValue, manager.batteryReadouts[device.id] == nil {
-                    Text("尝试于 \(reading.readAt.formatted(date: .abbreviated, time: .standard))")
-                    if let issue = reading.issue { Text(issue.message) }
-                }
-                if let reading = manager.keyboardChargingReadouts[device.id] {
-                    Text("键盘充电状态：\(reading.hasValue ? reading.chargingState?.title ?? "未取得" : "未取得")")
-                    Text("\(reading.hasValue ? "读取于" : "尝试于") \(reading.readAt.formatted(date: .omitted, time: .standard))")
-                    if let issue = reading.issue { Text(issue.message) }
-                }
-                if let reading = manager.chargingReadouts[device.id] {
-                    Text("充电状态：\(reading.state?.title ?? "未取得")")
-                    Text("\(reading.state == nil ? "尝试于" : "读取于") \(reading.readAt.formatted(date: .abbreviated, time: .standard))")
-                    if let issue = reading.issue { Text(issue.message) }
-                }
-                if let reading = manager.systemBatteryReadings[device.id], reading.issue != nil, manager.batteryReadouts[device.id] == nil {
-                    Text("尝试于 \(reading.acquiredAt.formatted(date: .abbreviated, time: .standard))")
-                    if let issue = reading.issue { Text(issue) }
-                }
-                if let reading = manager.batteryReadouts[device.id], let issue = reading.issue {
-                    Text("电量：\(issue.message)")
-                    Text("尝试于 \(reading.acquiredAt.formatted(date: .abbreviated, time: .standard))")
-                }
                 if !DeviceReadRegistry.backends(for: device).isEmpty {
                     Button(manager.capabilityActivity(for: device.id).reading.contains("battery") ? "正在读取电量…"
-                        : SystemBatteryService.canRead(device) ? "读取系统电量" : "读取电量") {
+                        : SystemBatteryService.canRead(device) ? "读取系统电量"
+                        : KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量") {
                         Task { await manager.readBattery(for: device.id) }
                     }.disabled(manager.isDeviceBusy(device.id) || manager.isSuspended)
                 }
@@ -65,20 +38,22 @@ struct MenuBarView: View {
                 }
             }
         }
-        if manager.physicalDevices.isEmpty { Text("未发现 Razer 设备") }
+        if manager.physicalDevices.isEmpty {
+            Text("未发现 Razer 设备")
+            Button("检查连接…") {
+                workspace.section = .devices
+                workspace.requestsConnectionCheck = true
+                openWindow(id: "devices")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
         localProfilesMenu
         Divider()
-        Button("打开本地档案") {
-            workspace.section = .profiles
-            openWindow(id: "devices")
-            NSApp.activate(ignoringOtherApps: true)
-        }
         Button("打开设备窗口") {
             workspace.section = .devices
             openWindow(id: "devices")
             NSApp.activate(ignoringOtherApps: true)
         }.keyboardShortcut("o")
-        Button("刷新设备") { manager.refresh() }.disabled(manager.isSuspended)
         if #available(macOS 14, *) {
             SettingsLink { Text("设置…") }.keyboardShortcut(",")
         } else {

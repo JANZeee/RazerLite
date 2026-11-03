@@ -51,27 +51,32 @@ struct DeviceInformationView: View {
                     }.padding(.top, 16)
                 }.font(.system(size: 12, weight: .medium))
             }
-            Text("HID 接口 · \(device.interfaces.count)").font(.system(size: 14, weight: .semibold)).padding(.top, 6)
-            Text("下列版本属性不等同于已验证的固件版本。报文长度来自系统属性；只有手动状态查询才收发指定 Feature Report。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-            ForEach(device.interfaces) { interface in
-                SurfaceCard {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text(interface.usbInterfaceNumber.map { "USB interface \($0)" } ?? "HID interface")
-                                .font(.system(size: 12, weight: .medium))
-                            Spacer()
-                            Text(String(format: "0x%llX", interface.id)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+            SurfaceCard {
+                DisclosureGroup("HID 接口 · \(device.interfaces.count)") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("下列版本属性不等同于已验证的固件版本。报文长度来自系统属性；只有手动状态查询才收发指定 Feature Report。")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                        ForEach(device.interfaces) { interface in
+                            SurfaceCard {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack {
+                                        Text(interface.usbInterfaceNumber.map { "USB interface \($0)" } ?? "HID interface")
+                                            .font(.system(size: 12, weight: .medium))
+                                        Spacer()
+                                        Text(String(format: "0x%llX", interface.id)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.tertiary)
+                                    }
+                                    field("Usage page / usage", "\(hexID(interface.primaryUsagePage)) / \(hexID(interface.primaryUsage))")
+                                    field("Input / Output / Feature", "\(size(interface.maxInputReportSize)) / \(size(interface.maxOutputReportSize)) / \(size(interface.maxFeatureReportSize)) 字节")
+                                    field("VersionNumber / bcdDevice", "\(hexID(interface.versionNumber)) / \(hexID(interface.usbDeviceRelease))")
+                                    field("Location ID", hexID(interface.locationID, width: 8))
+                                    field("USB 父设备", interface.usbDeviceID.map { String(format: "0x%llX", $0) } ?? "未发布")
+                                    field("IORegistry 类", interface.registryClass)
+                                    field("全部 usage", interface.usages.map { "\(hexID($0.page))/\(hexID($0.usage))" }.joined(separator: ", "))
+                                }
+                            }
                         }
-                        field("Usage page / usage", "\(hexID(interface.primaryUsagePage)) / \(hexID(interface.primaryUsage))")
-                        field("Input / Output / Feature", "\(size(interface.maxInputReportSize)) / \(size(interface.maxOutputReportSize)) / \(size(interface.maxFeatureReportSize)) 字节")
-                        field("VersionNumber / bcdDevice", "\(hexID(interface.versionNumber)) / \(hexID(interface.usbDeviceRelease))")
-                        field("Location ID", hexID(interface.locationID, width: 8))
-                        field("USB 父设备", interface.usbDeviceID.map { String(format: "0x%llX", $0) } ?? "未发布")
-                        field("IORegistry 类", interface.registryClass)
-                        field("全部 usage", interface.usages.map { "\(hexID($0.page))/\(hexID($0.usage))" }.joined(separator: ", "))
-                    }
-                }
+                    }.padding(.top, 16)
+                }.font(.system(size: 12, weight: .medium))
             }
             SurfaceCard {
                 DisclosureGroup("诊断日志 · 最近 \(logs.count) 条") {

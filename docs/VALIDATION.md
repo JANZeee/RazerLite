@@ -1,5 +1,7 @@
 # Phase 1 验证记录
 
+当前版本 **0.10.3 / build 17**，界面简化与资源短测见 [验收记录](PHASE0103_LIGHTWEIGHT.md)。以下保留历史记录。
+
 当前版本 0.10.2 的电量读取、调度、提醒及验证边界见 [PHASE0102_BATTERY.md](PHASE0102_BATTERY.md)；0.10.1 读取任务、连接生命周期与历史读数验收见 [PHASE0101_READ_LIFECYCLE.md](PHASE0101_READ_LIFECYCLE.md)；适配证据、能力状态和连接诊断见 [0.10.0](PHASE010_CAPABILITIES.md)。设置与性能历史基线见 [0.9.2](PHASE092_PREFERENCES.md)，本地档案与离线场景分别见 [0.9.1](PHASE091_LOCAL_LIBRARY.md) 和 [0.9.0](PHASE09_OFFLINE_SCENARIOS.md)。下文保留历史验证记录，不能把早期设备和指标直接当作当前状态。
 
 日期：2026-10-17，Asia/Singapore。机器：Apple M2 Pro / 16 GiB / arm64，macOS 27.2（26B5091g），CLT Apple Swift 6.4。测试时保留了现有 Razer.app、相关服务及 DriverKit 扩展。

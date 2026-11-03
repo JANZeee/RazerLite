@@ -84,8 +84,17 @@ struct DevicePageContent: View {
         if let dpiManager { return dpiManager.batterySummary(for: device) }
         return MenuBatterySummary.choose(mouse: telemetry, system: systemBattery, keyboard: nil)
     }
+    private var pages: [DevicePage] {
+        var result: [DevicePage] = [.overview]
+        if MouseReadService.canRead(device) { result.append(.controls) }
+        if ProfileDeviceTarget(device: device) != nil { result.append(.profiles) }
+        result.append(.information)
+        return result
+    }
+    private var selectedPage: DevicePage { pages.contains(state.page) ? state.page : .overview }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 23) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
                 Text("设备").foregroundStyle(.secondary)
                 Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
@@ -100,9 +109,9 @@ struct DevicePageContent: View {
                     .fixedSize(horizontal: true, vertical: false)
                 if let dpiManager, !DeviceReadRegistry.backends(for: device).isEmpty, !SystemBatteryService.canRead(device) {
                     Button { Task { await dpiManager.readBattery(for: device.id) } } label: {
-                        Image(systemName: "battery.100")
+                        Label(KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量", systemImage: "battery.100")
                     }
-                    .accessibilityLabel("读取电量").help("只读取电量，不查询 DPI；读数不表示持续在线")
+                    .accessibilityLabel(KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量").help("只读取电量，不查询 DPI；读数不表示持续在线")
                     .disabled(dpiManager.isSuspended || dpiManager.isDeviceBusy(device.id))
                 }
                 if MouseReadService.canRead(device) {
@@ -124,33 +133,28 @@ struct DevicePageContent: View {
                     }
                     .disabled(isReadingSystemBattery || (dpiManager?.isSuspended == true || dpiManager?.drainingOperationIDs.contains(device.id) == true || dpiManager?.readingBatteryIDs.contains(device.id) == true))
                     .help("按需读取 macOS 发布的电量，显示系统缓存；不修改设备设置")
-                } else if let dpiManager {
+                } else if let dpiManager, DeviceReadRegistry.backends(for: device).isEmpty {
                     Button { dpiManager.refresh() } label: {
                         Label("刷新信息", systemImage: "arrow.clockwise").font(.system(size: 11))
                     }.help("读取系统发布的 VID/PID、连接方式与 HID 接口；不发送厂商命令")
                 }
             }.font(.system(size: 12))
             HStack(spacing: 5) {
-                ForEach(DevicePage.allCases.filter { page in
-                    if device.isVirtual || (device.kind != .mouse && device.kind != .keyboard) {
-                        return page == .overview || page == .information
-                    }
-                    return true
-                }, id: \.self) { page in
+                ForEach(pages, id: \.self) { page in
                     Button { state.page = page } label: {
-                        Text(page.title(for: device)).font(.system(size: 12, weight: state.page == page ? .semibold : .regular))
-                            .foregroundStyle(state.page == page ? Color.primary : Color.secondary)
+                        Text(page.title(for: device)).font(.system(size: 12, weight: selectedPage == page ? .semibold : .regular))
+                            .foregroundStyle(selectedPage == page ? Color.primary : Color.secondary)
                             .padding(.horizontal, 18).padding(.vertical, 9)
-                            .background(state.page == page ? theme.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
-                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(state.page == page ? theme.line : .clear) }
-                    }.buttonStyle(.plain).accessibilityAddTraits(state.page == page ? .isSelected : [])
+                            .background(selectedPage == page ? theme.surface : .clear, in: RoundedRectangle(cornerRadius: 8))
+                            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(selectedPage == page ? theme.line : .clear) }
+                    }.buttonStyle(.plain).accessibilityAddTraits(selectedPage == page ? .isSelected : [])
                 }
                 Spacer(minLength: 0)
             }.padding(4).background(theme.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 11))
             if let time = summary.lastResultAt {
                 Text("更新于 \(time.formatted(date: .omitted, time: .standard))")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .help("最近一次读取完成或失败的时间；读数不自动刷新")
+                    .help("最近一次查询完成或失败的时间；各项读数保留自己的取得时间")
             }
             if summary.state == .waiting {
                 Label(summary.state.detail, systemImage: "hourglass")
@@ -163,8 +167,8 @@ struct DevicePageContent: View {
                 Label(issue.message, systemImage: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if isReading || !visibleMouseIssues.isEmpty { readStatus }
-            if isReadingSystemBattery || (systemBattery != nil && dpiManager?.batteryReadouts[device.id] == nil) { systemBatteryStatus }
-            switch state.page {
+            if isReadingSystemBattery || (systemBattery?.issue != nil && dpiManager?.batteryReadouts[device.id] == nil) { systemBatteryStatus }
+            switch selectedPage {
             case .overview: overview
             case .controls:
                 if device.presentation.isKeyboard { LightingPreviewView(state: state) }
@@ -199,7 +203,7 @@ struct DevicePageContent: View {
                 VStack(alignment: .leading, spacing: 13) {
                     Text(device.isVirtual ? "系统设备" : device.kind.title)
                         .font(.system(size: 10, weight: .semibold)).tracking(2).foregroundStyle(theme.accent)
-                    Text(device.presentation.name).font(.system(size: 32, weight: .semibold))
+                    Text(device.presentation.name).font(.system(size: 28, weight: .semibold))
                         .tracking(-0.8).lineLimit(2).minimumScaleFactor(0.8)
                     Text(device.presentation.subtitle).font(.system(size: 13)).foregroundStyle(.secondary)
                     HStack(spacing: 7) {
@@ -212,6 +216,7 @@ struct DevicePageContent: View {
                             .foregroundStyle(.secondary).frame(width: 230, height: 174)
                     } else if device.kind == .mouse || device.kind == .keyboard {
                         DeviceArtwork(keyboard: device.presentation.isKeyboard)
+                            .scaleEffect(0.72).frame(width: 214, height: 138)
                     } else {
                         Image(systemName: device.kind.symbol).font(.system(size: 66, weight: .ultraLight))
                             .foregroundStyle(.secondary).frame(width: 230, height: 174)
@@ -220,7 +225,7 @@ struct DevicePageContent: View {
                 }
             }
             .padding(.horizontal, 26).padding(.vertical, 20)
-            .frame(maxWidth: .infinity, minHeight: 222)
+            .frame(maxWidth: .infinity, minHeight: 172)
             .background {
                 RoundedRectangle(cornerRadius: 18).fill(theme.surface)
                 RoundedRectangle(cornerRadius: 18)
@@ -232,7 +237,7 @@ struct DevicePageContent: View {
                 Rectangle().fill(theme.line).frame(width: 1, height: 50)
                 metric("电池电量", value: batterySummary.map { "\($0.percent)%" } ?? "—",
                        detail: batterySummary?.source ?? (dpiManager?.capabilityActivity(for: device.id).reading.contains("battery") == true ? "正在读取" : "未取得"),
-                       icon: "battery.100")
+                       icon: "battery.100", acquiredAt: batterySummary?.acquiredAt)
             }
             .padding(.vertical, 18).background(theme.surface, in: RoundedRectangle(cornerRadius: 14))
             .overlay { RoundedRectangle(cornerRadius: 14).strokeBorder(theme.line) }
@@ -245,26 +250,22 @@ struct DevicePageContent: View {
             if let manager = dpiManager, KeyboardPowerReadService.canRead(device) {
                 KeyboardPowerPanel(device: device, manager: manager)
             }
-            if !device.isVirtual && (device.kind == .mouse || device.kind == .keyboard) {
-                HStack {
-                    Text("设备功能").font(.system(size: 14, weight: .semibold))
-                    Spacer()
-                }.padding(.top, 5)
-                HStack(spacing: 15) {
-                    FeatureTile(title: device.presentation.isKeyboard ? "灯光" : "性能",
-                                icon: device.presentation.isKeyboard ? "lightbulb" : "speedometer",
-                                headline: device.presentation.isKeyboard ? "颜色与亮度" : "灵敏度与回报率",
-                                detail: device.presentation.isKeyboard ? "调整窗口中的预览效果" : telemetry?.dpi != nil ? "查看 DPI 与档位" : MouseReadService.canRead(device) ? "读取 DPI 与档位" : "尚未适配",
-                                badge: device.presentation.isKeyboard ? "本地预览" : telemetry?.dpi != nil ? "已读取" : MouseReadService.canRead(device) ? "只读查询" : "待适配") { state.page = .controls }
-                    FeatureTile(title: "按键", icon: "command", headline: "按键映射",
-                                detail: "映射与宏", badge: "未开放") { state.page = .buttons }
+            if MouseReadService.canRead(device) {
+                HStack(alignment: .top, spacing: 15) {
+                    FeatureTile(title: "性能", icon: "speedometer", headline: "DPI 与回报率",
+                                detail: "查看与调整鼠标灵敏度",
+                                badge: telemetry?.dpi != nil ? "已读取" : "未读取") { state.page = .controls }
+                    if ProfileDeviceTarget(device: device) != nil {
+                        FeatureTile(title: "档案", icon: "rectangle.stack", headline: "DPI 预设",
+                                    detail: profiles.selectedProfile(for: device)?.name ?? "保存常用灵敏度",
+                                    badge: "本地") { state.page = .profiles }
+                    }
                 }
-                if ProfileDeviceTarget(device: device) != nil {
-                    FeatureTile(title: "档案", icon: "rectangle.stack", headline: "DPI 预设",
-                                detail: profiles.selectedProfile(for: device).map { "已选择本地预设：\($0.name)" } ?? "保存与切换本地 DPI 预设",
-                                badge: profiles.selectedProfile(for: device) == nil ? "本地预设" : "已选择") { state.page = .profiles }
-                }
+            } else if DeviceReadRegistry.backends(for: device).isEmpty && !device.isVirtual {
+                Text("已识别设备，设置功能尚未适配。")
+                    .font(.callout).foregroundStyle(.secondary)
             }
+
         }
     }
 
@@ -328,12 +329,16 @@ struct DevicePageContent: View {
         .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(theme.accent.opacity(0.16)) }
     }
 
-    private func metric(_ title: String, value: String, detail: String, icon: String) -> some View {
+    private func metric(_ title: String, value: String, detail: String, icon: String, acquiredAt: Date? = nil) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             Label(title, systemImage: icon).font(.system(size: 10)).foregroundStyle(.secondary)
             HStack(alignment: .firstTextBaseline, spacing: 9) {
                 Text(value).font(.system(size: 21, weight: .medium, design: .rounded))
-                Text(detail).font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+            Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+            if let acquiredAt {
+                Text("取得于 \(acquiredAt.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22)
     }

@@ -18,6 +18,7 @@ final class AppWorkspace: ObservableObject {
     @Published var section: Section {
         didSet { preferences.section = section }
     }
+    @Published var requestsConnectionCheck = false
     @Published var navigationRequest: DeviceNavigationRequest?
 
     init(preferences: AppPreferences = AppPreferences()) {
