@@ -1,7 +1,7 @@
 import Foundation
 
 enum DeviceOperation: Sendable {
-    case mouse, battery, polling, charging, keyboardBattery, keyboardCharging, systemBattery, dpiPrepare, dpiApply
+    case mouse, battery, polling, charging, keyboardBattery, keyboardCharging, systemBattery, dpiPrepare, dpiApply, pollingPrepare, pollingApply
 
     var fields: Set<String> {
         switch self {
@@ -9,7 +9,7 @@ enum DeviceOperation: Sendable {
         case .polling: ["polling"]
         case .charging, .keyboardCharging: ["charging"]
         case .battery, .keyboardBattery, .systemBattery: ["battery"]
-        case .dpiPrepare, .dpiApply: []
+        case .dpiPrepare, .dpiApply, .pollingPrepare, .pollingApply: []
         }
     }
 }

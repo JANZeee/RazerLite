@@ -41,7 +41,7 @@ struct OfflineWorkbenchView: View {
                     Button("紧凑窗口 · 960 × 640") { resize(width: 960, height: 640) }
                     Button("标准窗口 · 1180 × 800") { resize(width: 1180, height: 800) }
                 }.frame(width: 100)
-                Menu("DPI 结果") {
+                Menu("设置结果") {
                     ForEach(OfflineDPIOutcome.allCases) { value in
                         Button(value.title) {
                             state.dpiOutcome = value

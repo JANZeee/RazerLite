@@ -19,9 +19,7 @@ struct DPIEditorView: View {
     let selectedProfile: MouseDPIProfile?
     @StateObject private var editor = DPIEditorState()
     @Environment(\.colorScheme) private var scheme
-    private var busy: Bool { manager.isSuspended || manager.readingBatteryIDs.contains(device.id) || manager.drainingOperationIDs.contains(device.id) || manager.dpiBusyIDs.contains(device.id)
-        || manager.readingDeviceIDs.contains(device.id) || manager.readingPollingDeviceIDs.contains(device.id)
-        || manager.readingChargingDeviceIDs.contains(device.id) }
+    private var busy: Bool { manager.isSuspended || manager.isDeviceBusy(device.id) }
 
     var body: some View {
         SurfaceCard {

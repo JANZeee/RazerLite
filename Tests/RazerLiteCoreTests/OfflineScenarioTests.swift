@@ -11,6 +11,89 @@ struct OfflineScenarioTests {
         return try decoder.decode(DiagnosticSnapshot.self, from: session.manager.snapshotData())
     }
 
+    @Test func pollingChangesExcludeDPIAndReadsAndRemainDeviceSpecific() async throws {
+        let session = try OfflineScenarioSession()
+        await session.load(.twinMice)
+        let first = session.manager.devices[0], second = session.manager.devices[1]
+        await session.manager.preparePollingChange(for: first.id, hertz: 2000)
+        let plan = try #require(session.manager.pendingPollingChanges[first.id])
+        #expect(session.manager.adapterAssessment(for: first).capability("pollingWrite")?.session.state == .awaitingConfirmation)
+        let before = await session.services.operations
+        await session.manager.prepareDPIChange(for: first.id, x: 1600, y: 1600)
+        await session.manager.readMouseState(for: first.id)
+        await session.manager.readPollingRate(for: first.id)
+        await session.manager.readBattery(for: first.id)
+        #expect(await session.services.operations == before)
+        await session.manager.confirmPollingChange(for: first.id, planID: plan.id)
+        await session.manager.confirmPollingChange(for: first.id, planID: plan.id)
+        #expect((await session.services.operations).filter { $0.hasPrefix("apply-polling:") }.count == 1)
+        #expect(session.manager.pollingReadouts[first.id]?.configuredHertz == 2000)
+        #expect(session.manager.pollingReadouts[second.id]?.configuredHertz == 1000)
+        #expect(session.manager.mouseReadouts[first.id] == nil)
+        let data = try snapshot(session)
+        #expect(data.schemaVersion == 10 && data.pollingWriteResults?[first.id]?.outcome == .verified)
+        #expect(data.adapterAssessments?[first.id]?.capability("pollingWrite")?.evidence.level == .simulationTested)
+        await session.manager.readPollingRate(for: first.id)
+        #expect(session.manager.pollingReadouts[first.id]?.configuredHertz == 2000)
+        await session.manager.prepareDPIChange(for: first.id, x: 1600, y: 1600)
+        let calls = await session.services.operations
+        await session.manager.preparePollingChange(for: first.id, hertz: 4000)
+        #expect(await session.services.operations == calls)
+    }
+
+    @Test func pollingCancelSleepDisconnectAndWindowCloseRevokeConfirmation() async throws {
+        for event in 0..<4 {
+            let session = try OfflineScenarioSession()
+            await session.load(.mouse)
+            let id = try #require(session.manager.devices.first?.id)
+            await session.manager.preparePollingChange(for: id, hertz: 2000)
+            let plan = try #require(session.manager.pendingPollingChanges[id])
+            switch event {
+            case 0: session.manager.cancelPollingChange(for: id)
+            case 1: session.manager.suspend(); session.manager.resume()
+            case 2: session.disconnect(); session.reconnect()
+            default: session.manager.invalidateControlPlans()
+            }
+            await session.manager.confirmPollingChange(for: id, planID: plan.id)
+            #expect(!plan.isUsable && session.manager.pendingPollingChanges.isEmpty)
+            #expect(!(await session.services.operations).contains { $0.hasPrefix("apply-polling:") })
+        }
+    }
+
+    @Test func pollingFailuresNeverBecomeCurrentReadingsOrHardwareEvidence() async throws {
+        for outcome in [OfflineDPIOutcome.mismatch, .notSent, .expired] {
+            let session = try OfflineScenarioSession()
+            await session.load(.mouse)
+            let device = try #require(session.manager.devices.first)
+            await session.setDPIOutcome(outcome)
+            await session.manager.preparePollingChange(for: device.id, hertz: 2000)
+            let plan = try #require(session.manager.pendingPollingChanges[device.id])
+            await session.manager.confirmPollingChange(for: device.id, planID: plan.id)
+            #expect(session.manager.pollingReadouts[device.id] == nil)
+            #expect(session.manager.pollingWriteResults[device.id]?.outcome == (outcome == .mismatch ? .uncertain : .notSent))
+            #expect(session.manager.adapterAssessment(for: device).capability("pollingWrite")?.session.state != .succeeded)
+        }
+    }
+
+    @Test func cancelledPollingPreparationDrainsBeforeAnotherOperationAndDropsLatePlan() async throws {
+        let session = try OfflineScenarioSession()
+        await session.load(.mouse)
+        let id = try #require(session.manager.devices.first?.id)
+        await session.services.configure(.reading)
+        let task = Task { await session.manager.preparePollingChange(for: id, hertz: 2000) }
+        await session.services.waitForPendingRead()
+        #expect(session.manager.pollingWriteBusyIDs.contains(id))
+        session.manager.cancelPollingChange(for: id)
+        #expect(session.manager.drainingOperationIDs.contains(id) && session.manager.isDeviceBusy(id))
+        let calls = await session.services.operations
+        await session.manager.prepareDPIChange(for: id, x: 1600, y: 1600)
+        #expect(await session.services.operations == calls)
+        await session.finishReads()
+        await task.value
+        #expect(session.manager.pendingPollingChanges.isEmpty && !session.manager.isDeviceBusy(id))
+        #expect(session.manager.pollingReadouts[id] == nil)
+    }
+
     @Test func batchChangesStayIsolatedAndRejectAnOldDraft() async throws {
         let session = try OfflineScenarioSession()
         await session.load(.twinMice)

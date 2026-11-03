@@ -21,6 +21,15 @@ final class ViperV4ControlClient {
         _ = try receiveReply(commandClass: 0x04, commandID: 0x06)
     }
 
+    func setPollingRate(_ hertz: Int) throws {
+        try transport.send(ViperV4PollingWriteProtocol.request(hertz: hertz), reportID: ViperV4ReadProtocol.reportID)
+        let payload = try receiveReply(commandClass: 0, commandID: 0x40)
+        try ViperV4PollingWriteProtocol.validateAcknowledgement(payload, hertz: hertz)
+        // Public exact-model implementation waits 150 ms for RF reconfiguration before GET.
+        // This is a one-shot wait on the I/O executor, never a UI timer or polling loop.
+        Thread.sleep(forTimeInterval: 0.150)
+    }
+
     private func receiveReply(commandClass: UInt8, commandID: UInt8) throws -> [UInt8] {
         // Native SetReport completion need not mean the receiver has prepared its response.
         // Give it one settling interval before GetReport; retain all matching checks afterwards.

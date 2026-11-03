@@ -104,6 +104,7 @@ struct PerformancePanel: View {
     let device: DeviceInfo
     var telemetry: MouseTelemetry? = nil
     var polling: MousePollingReading? = nil
+    var manager: DeviceManager? = nil
     var isReadingPolling = false
     var pollingDisabled = false
     var onReadPolling: () -> Void = {}
@@ -163,6 +164,9 @@ struct PerformancePanel: View {
                             Button(isReadingPolling ? "正在读取…" : "读取回报率") { onReadPolling() }
                                 .disabled(isReadingPolling || pollingDisabled)
                         }
+                    }
+                    if let manager, PollingRateReadService.canRead(device) {
+                        PollingRateEditorView(device: device, manager: manager)
                     }
                     if let issue = polling?.issue {
                         if let kind = issue.kind { SmallBadge(title: kind.title, color: .orange) }

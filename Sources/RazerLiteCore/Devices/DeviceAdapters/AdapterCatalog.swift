@@ -53,14 +53,18 @@ public struct CapabilitySession: Codable, Equatable, Sendable {
 public struct CapabilityActivity: Sendable {
     public var reading: Set<String>
     public var isSuspended: Bool
+    public var pollingWriteBusy: Bool
+    public var pollingAwaitingConfirmation: Bool
     public var dpiBusy: Bool
     public var dpiAwaitingConfirmation: Bool
     public var isDraining: Bool
     public var cancelled: Set<String>
     public var previousReadings: [String: CapabilitySample]
     public init(reading: Set<String> = [], isSuspended: Bool = false, dpiBusy: Bool = false, dpiAwaitingConfirmation: Bool = false,
+                pollingWriteBusy: Bool = false, pollingAwaitingConfirmation: Bool = false,
                 isDraining: Bool = false, cancelled: Set<String> = [], previousReadings: [String: CapabilitySample] = [:]) {
         self.reading = reading; self.isSuspended = isSuspended
+        self.pollingWriteBusy = pollingWriteBusy; self.pollingAwaitingConfirmation = pollingAwaitingConfirmation
         self.dpiBusy = dpiBusy; self.dpiAwaitingConfirmation = dpiAwaitingConfirmation
         self.isDraining = isDraining; self.cancelled = cancelled; self.previousReadings = previousReadings
     }
@@ -88,7 +92,7 @@ public struct AdapterAssessment: Codable, Equatable, Sendable {
 
     public func capability(_ id: String) -> DeviceCapability? { capabilities.first { $0.id == id } }
     public var readingSummary: String {
-        let values = capabilities.filter { $0.implementation == .implemented && $0.id != "discovery" && $0.id != "localProfiles" && $0.id != "dpiWrite" }
+        let values = capabilities.filter { $0.implementation == .implemented && $0.id != "discovery" && $0.id != "localProfiles" && $0.id != "dpiWrite" && $0.id != "pollingWrite" }
         if values.contains(where: { $0.session.state == .suspended }) { return "读取已暂停" }
         if values.contains(where: { $0.session.state == .waiting }) { return "等待上次操作结束" }
         if values.contains(where: { $0.session.state == .reading }) { return "正在读取" }
@@ -119,7 +123,7 @@ public enum AdapterCatalog {
 
     public static let featureTitles = [
         ("discovery", "设备信息与接口枚举"), ("firmware", "固件查询"),
-        ("dpi", "DPI 读取"), ("dpiWrite", "当前 DPI 设置"), ("stages", "DPI 档位读取"),
+        ("dpi", "DPI 读取"), ("dpiWrite", "DPI 档位设置"), ("stages", "DPI 档位读取"),
         ("polling", "回报率配置读取"), ("pollingWrite", "回报率设置"), ("rgb", "RGB 亮度 / 灯效"),
         ("battery", "电池电量"), ("charging", "充电状态"),
         ("hardwareMapping", "硬件按键映射 / Fn"), ("systemMapping", "系统重映射 / 宏"),
@@ -130,7 +134,7 @@ public enum AdapterCatalog {
                               systemBattery: SystemBatteryReading? = nil, polling: MousePollingReading? = nil,
                               charging: MouseChargingReading? = nil, keyboardBattery: KeyboardPowerReading? = nil,
                               keyboardCharging: KeyboardPowerReading? = nil, activity: CapabilityActivity = .init(),
-                              dpiWrite: MouseDPIWriteResult? = nil, simulation: Bool = false) -> AdapterAssessment {
+                              dpiWrite: MouseDPIWriteResult? = nil, pollingWrite: PollingRateWriteResult? = nil, simulation: Bool = false) -> AdapterAssessment {
         let manifest = AdapterManifestCatalog.manifest(for: device)
         let backends = DeviceReadRegistry.backends(for: device)
         let matched = manifest.map { backends.map(\.rawValue).contains($0.id) } ?? false
@@ -142,6 +146,7 @@ public enum AdapterCatalog {
         let keyboardBattery = keyboardBattery.flatMap { $0.matches(device, field: .battery) ? $0 : nil }
         let keyboardCharging = keyboardCharging.flatMap { $0.matches(device, field: .charging) ? $0 : nil }
         let system = systemBattery.flatMap { $0.matches(device) ? $0 : nil }
+        let rateWrite = pollingWrite.flatMap { $0.deviceID == device.id && $0.interfaceID == mouseInterface ? $0 : nil }
         let write = dpiWrite.flatMap { $0.deviceID == device.id && $0.interfaceID == mouseInterface ? $0 : nil }
         let capabilities = featureTitles.map { id, title -> DeviceCapability in
             var evidence = manifest?.feature(id) ?? AdapterFeatureEvidence(id: id, implementation: .notImplemented,
@@ -178,6 +183,13 @@ public enum AdapterCatalog {
                     session = .init(write.outcome == .verified ? .succeeded : write.outcome == .uncertain ? .unconfirmed : .notRequested,
                         at: write.completedAt, source: simulation ? "模拟控制服务" : "设备控制结果", detail: write.message)
                 } else { session = .init(.notRequested, detail: "检查、明确确认、一次性许可和完整读回；不会自动写入。") }
+            } else if id == "pollingWrite" {
+                if activity.pollingWriteBusy { session = .init(.working, detail: "回报率检查或应用进行中；以最终读回为准。") }
+                else if activity.pollingAwaitingConfirmation { session = .init(.awaitingConfirmation, detail: "等待用户确认，尚未写入。") }
+                else if let rateWrite {
+                    session = .init(rateWrite.outcome == .verified ? .succeeded : rateWrite.outcome == .uncertain ? .unconfirmed : .notRequested,
+                        at: rateWrite.completedAt, source: simulation ? "模拟控制服务" : "设备控制结果", detail: rateWrite.message)
+                } else { session = .init(.notRequested, detail: "明确确认后一次提交并读回配置；不代表实测频率。") }
             } else if activity.reading.contains(id) {
                 session = .init(.reading, detail: "等待本次查询完成。")
             } else if activity.cancelled.contains(id) {

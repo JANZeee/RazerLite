@@ -37,6 +37,13 @@ public final class DeviceManager: ObservableObject {
     @Published public private(set) var dpiBusyIDs: Set<String> = []
     @Published public private(set) var dpiErrors: [String: String] = [:]
     @Published public private(set) var dpiWriteResults: [String: MouseDPIWriteResult] = [:]
+    @Published public private(set) var pendingPollingChanges: [String: PollingRatePlan] = [:]
+    @Published public private(set) var pollingWriteBusyIDs: Set<String> = []
+    @Published public private(set) var pollingWriteErrors: [String: String] = [:]
+    @Published public private(set) var pollingWriteResults: [String: PollingRateWriteResult] = [:]
+    private let pollingController: any PollingRateControlling
+    private var activePollingPlans: [String: PollingRatePlan] = [:]
+    private var pollingResultInterfaces: [String: HIDInterface] = [:]
     public private(set) var discoveryReadyMilliseconds: Double?
     private let discovery: any HIDDiscovering
     private let mouseReader: any MouseStatusReading
@@ -62,7 +69,7 @@ public final class DeviceManager: ObservableObject {
     private var hasRequestedQueries = false
     private var hasRequestedSystemMetadata = false
     private var hasRequestedAutomaticBattery = false
-    private var hasConfirmedDPIWrite = false
+    private var hasConfirmedDeviceWrite = false
     public var physicalDevices: [DeviceInfo] { devices.filter { !$0.isVirtual } }
     public var virtualDevices: [DeviceInfo] { devices.filter(\.isVirtual) }
     public var interfaceCount: Int { interfaces.count }
@@ -71,13 +78,14 @@ public final class DeviceManager: ObservableObject {
                 dpiController: any MouseDPIControlling = MouseDPIService(),
                 systemBatteryReader: any SystemBatteryReadingService = SystemBatteryService(),
                 pollingReader: any MousePollingReadingService = PollingRateReadService(),
+                pollingController: any PollingRateControlling = PollingRateControlService(),
                 chargingReader: any MouseChargingReadingService = ChargingReadService(),
                 keyboardPowerReader: any KeyboardPowerReadingService = KeyboardPowerReadService(),
                 batteryReader: any BatteryReadingService = ViperBatteryReadService(), isSimulation: Bool = false) {
         if isSimulation {
             precondition(!(discovery is HIDDiscovery) && !(mouseReader is MouseReadService)
                 && !(dpiController is MouseDPIService) && !(systemBatteryReader is SystemBatteryService)
-                && !(pollingReader is PollingRateReadService) && !(chargingReader is ChargingReadService)
+                && !(pollingController is PollingRateControlService) && !(pollingReader is PollingRateReadService) && !(chargingReader is ChargingReadService)
                 && !(keyboardPowerReader is KeyboardPowerReadService) && !(batteryReader is ViperBatteryReadService), "模拟模式必须替换全部真实设备服务")
         }
         self.isSimulation = isSimulation
@@ -87,6 +95,7 @@ public final class DeviceManager: ObservableObject {
         self.dpiController = dpiController
         self.systemBatteryReader = systemBatteryReader
         self.pollingReader = pollingReader
+        self.pollingController = pollingController
         self.chargingReader = chargingReader
         self.keyboardPowerReader = keyboardPowerReader
     }
@@ -131,7 +140,10 @@ public final class DeviceManager: ObservableObject {
         readingSystemBatteryIDs.removeAll()
         systemBatteryReadings.removeAll()
         batteryReadingDevices.removeAll()
-        invalidateDPIPlans()
+        invalidateControlPlans()
+        pollingWriteResults.removeAll()
+        pollingResultInterfaces.removeAll()
+        pollingWriteErrors.removeAll()
         dpiWriteResults.removeAll()
         dpiResultInterfaces.removeAll()
         dpiErrors.removeAll()
@@ -139,7 +151,7 @@ public final class DeviceManager: ObservableObject {
             hasRequestedQueries = false
             hasRequestedSystemMetadata = false
             hasRequestedAutomaticBattery = false
-            hasConfirmedDPIWrite = false
+            hasConfirmedDeviceWrite = false
         }
         syncOperationActivity()
     }
@@ -269,6 +281,7 @@ public final class DeviceManager: ObservableObject {
         let reading = operations.activeOperation(for: deviceID)?.fields ?? []
         return .init(reading: reading, isSuspended: isSuspended, dpiBusy: dpiBusyIDs.contains(deviceID),
                      dpiAwaitingConfirmation: pendingDPIChanges[deviceID] != nil,
+                     pollingWriteBusy: pollingWriteBusyIDs.contains(deviceID), pollingAwaitingConfirmation: pendingPollingChanges[deviceID] != nil,
                      isDraining: drainingOperationIDs.contains(deviceID), cancelled: cancelledReadFields[deviceID] ?? [],
                      previousReadings: lastSuccessfulReadings[deviceID] ?? [:])
     }
@@ -277,7 +290,7 @@ public final class DeviceManager: ObservableObject {
         AdapterCatalog.assess(device, battery: batteryReadouts[device.id], telemetry: mouseReadouts[device.id], systemBattery: systemBatteryReadings[device.id],
             polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
             keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id],
-            activity: capabilityActivity(for: device.id), dpiWrite: dpiWriteResults[device.id], simulation: isSimulation)
+            activity: capabilityActivity(for: device.id), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id], simulation: isSimulation)
     }
 
     public func connectionCheck() -> ConnectionCheckReport {
@@ -327,7 +340,10 @@ public final class DeviceManager: ObservableObject {
         readingSystemBatteryIDs.removeAll()
         systemBatteryReadings.removeAll()
         batteryReadingDevices.removeAll()
-        invalidateDPIPlans()
+        invalidateControlPlans()
+        pollingWriteResults.removeAll()
+        pollingResultInterfaces.removeAll()
+        pollingWriteErrors.removeAll()
         dpiWriteResults.removeAll()
         dpiResultInterfaces.removeAll()
         dpiErrors.removeAll()
@@ -356,7 +372,7 @@ public final class DeviceManager: ObservableObject {
 
     private func prepareDPIChange(for deviceID: String, prepare: (DeviceInfo) async throws -> MouseDPIPlan) async {
         guard isMonitoring, !isSuspended, !operations.isBusy(deviceID),
-              dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil,
+              dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
               let device = devices.first(where: { $0.id == deviceID }),
               let interface = ViperV4Adapter.controlInterface(in: device),
               let ticket = operations.begin(.dpiPrepare, for: deviceID) else { return }
@@ -417,7 +433,7 @@ public final class DeviceManager: ObservableObject {
         pollingReadingInterfaces.removeValue(forKey: deviceID)
         chargingReadouts.removeValue(forKey: deviceID)
         chargingReadingInterfaces.removeValue(forKey: deviceID)
-        hasConfirmedDPIWrite = true
+        hasConfirmedDeviceWrite = true
         record("用户确认 \(plan.deviceName) 第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档 DPI 变更；提交完整表并读回。")
         let result = await dpiController.apply(plan)
         guard isMonitoring, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
@@ -449,9 +465,100 @@ public final class DeviceManager: ObservableObject {
         syncOperationActivity()
     }
 
+    /// Revokes every pending or not-yet-submitted setting when the window closes or a session ends.
+    public func invalidateControlPlans() {
+        invalidateDPIPlans()
+        for plan in pendingPollingChanges.values { plan.invalidate() }
+        for plan in activePollingPlans.values { plan.invalidate() }
+        pendingPollingChanges.removeAll()
+        activePollingPlans.removeAll()
+        for id in pollingWriteBusyIDs { operations.cancelActive(for: id) }
+        syncOperationActivity()
+    }
+
+    public func preparePollingChange(for deviceID: String, hertz: Int) async {
+        guard isMonitoring, !isSuspended, !Task.isCancelled, !isDeviceBusy(deviceID),
+              let device = devices.first(where: { $0.id == deviceID }),
+              let interface = ViperV4Adapter.controlInterface(in: device),
+              let ticket = operations.begin(.pollingPrepare, for: deviceID) else { return }
+        defer { finishOperation(ticket) }
+        syncOperationActivity()
+        pollingWriteErrors.removeValue(forKey: deviceID)
+        pollingWriteResults.removeValue(forKey: deviceID)
+        pollingResultInterfaces.removeValue(forKey: deviceID)
+        pollingReadouts.removeValue(forKey: deviceID)
+        pollingReadingInterfaces.removeValue(forKey: deviceID)
+        hasRequestedQueries = true
+        do {
+            let plan = try await pollingController.prepare(device, hertz: hertz)
+            guard !Task.isCancelled, operations.isCurrent(ticket), isMonitoring else { plan.invalidate(); return }
+            guard plan.deviceID == deviceID, plan.interface.matchesSession(interface) else {
+                plan.invalidate(); throw MouseQueryError.deviceChanged
+            }
+            pendingPollingChanges[deviceID] = plan
+            pollingReadouts[deviceID] = .init(deviceID: deviceID, interfaceID: interface.id, readAt: plan.createdAt,
+                configuredHertz: plan.before, issue: nil)
+            pollingReadingInterfaces[deviceID] = interface
+            rememberSuccessfulReadings(for: device, fields: ["polling"])
+            record("\(device.product) 回报率变更已检查，等待明确确认；尚未写入。")
+        } catch {
+            guard !Task.isCancelled, operations.isCurrent(ticket) else { return }
+            pollingWriteErrors[deviceID] = error.localizedDescription
+            record("回报率检查失败：\(error.localizedDescription)", isError: true, presentError: false)
+        }
+    }
+
+    public func cancelPollingChange(for deviceID: String) {
+        pendingPollingChanges.removeValue(forKey: deviceID)?.invalidate()
+        if operations.activeOperation(for: deviceID) == .pollingPrepare {
+            operations.cancelActive(for: deviceID)
+            syncOperationActivity()
+        }
+    }
+
+    public func confirmPollingChange(for deviceID: String, planID: UUID) async {
+        guard isMonitoring, !isSuspended, !Task.isCancelled, !operations.isBusy(deviceID),
+              let plan = pendingPollingChanges[deviceID], plan.id == planID,
+              let ticket = operations.begin(.pollingApply, for: deviceID) else { return }
+        pendingPollingChanges.removeValue(forKey: deviceID)
+        activePollingPlans[deviceID] = plan
+        defer {
+            if activePollingPlans[deviceID]?.id == plan.id { activePollingPlans.removeValue(forKey: deviceID) }
+            finishOperation(ticket)
+        }
+        syncOperationActivity()
+        // RF reconfiguration makes earlier status samples historical until explicitly queried again.
+        pollingReadouts.removeValue(forKey: deviceID)
+        pollingReadingInterfaces.removeValue(forKey: deviceID)
+        batteryReadouts.removeValue(forKey: deviceID)
+        mouseReadouts.removeValue(forKey: deviceID)
+        mouseReadingInterfaces.removeValue(forKey: deviceID)
+        chargingReadouts.removeValue(forKey: deviceID)
+        chargingReadingInterfaces.removeValue(forKey: deviceID)
+        hasConfirmedDeviceWrite = true
+        record("用户确认 \(plan.deviceName) 回报率 \(plan.before) → \(plan.after) Hz；单次提交并读回。")
+        let result = await withTaskCancellationHandler {
+            await pollingController.apply(plan)
+        } onCancel: { plan.invalidate() }
+        guard !Task.isCancelled, operations.isCurrent(ticket), isMonitoring else { return }
+        guard result.deviceID == deviceID, result.interfaceID == plan.interface.id else {
+            pollingWriteErrors[deviceID] = "控制结果身份不匹配；操作结果不确定，请重新读取。"
+            return
+        }
+        pollingWriteResults[deviceID] = result
+        pollingResultInterfaces[deviceID] = plan.interface
+        if result.outcome == .verified, let hertz = result.readback, hertz == plan.after {
+            pollingReadouts[deviceID] = .init(deviceID: deviceID, interfaceID: plan.interface.id,
+                readAt: result.completedAt, configuredHertz: hertz, issue: nil)
+            pollingReadingInterfaces[deviceID] = plan.interface
+            if let device = devices.first(where: { $0.id == deviceID }) { rememberSuccessfulReadings(for: device, fields: ["polling"]) }
+        }
+        record(result.message, isError: result.outcome != .verified, presentError: false)
+    }
+
     public func clearError() { lastError = nil }
     public func snapshotData() throws -> Data {
-        try DiagnosticSnapshot(interfaces: interfaces, batteryReadouts: batteryReadouts, mouseReadouts: mouseReadouts, dpiWriteResults: dpiWriteResults,
+        try DiagnosticSnapshot(interfaces: interfaces, batteryReadouts: batteryReadouts, mouseReadouts: mouseReadouts, dpiWriteResults: dpiWriteResults, pollingWriteResults: pollingWriteResults,
                                systemBatteryReadings: systemBatteryReadings,
                                pollingReadouts: pollingReadouts,
                                chargingReadouts: chargingReadouts,
@@ -461,7 +568,7 @@ public final class DeviceManager: ObservableObject {
                                isMonitoring: isMonitoring, isSuspended: isSuspended,
                                queriesRequested: hasRequestedQueries, systemMetadataRequested: hasRequestedSystemMetadata,
                                automaticBatteryRequested: hasRequestedAutomaticBattery,
-                               settingRequested: hasConfirmedDPIWrite,
+                               settingRequested: hasConfirmedDeviceWrite,
                                simulation: isSimulation).jsonData()
     }
     public func reportError(_ message: String) { record(message, isError: true) }
@@ -512,6 +619,18 @@ public final class DeviceManager: ObservableObject {
             activeDPIPlans.removeValue(forKey: id)?.invalidate()
             dpiRequests.removeValue(forKey: id)
         }
+        for (id, plan) in pendingPollingChanges where current[id]?.matchesSession(plan.interface) != true {
+            cancelPollingChange(for: id)
+        }
+        for (id, plan) in activePollingPlans where current[id]?.matchesSession(plan.interface) != true {
+            activePollingPlans.removeValue(forKey: id)?.invalidate()
+        }
+        pollingWriteErrors = pollingWriteErrors.filter { current[$0.key] != nil }
+        pollingWriteResults = pollingWriteResults.filter { id, result in
+            guard let current = current[id], let expected = pollingResultInterfaces[id] else { return false }
+            return result.interfaceID == current.id && current.matchesSession(expected)
+        }
+        pollingResultInterfaces = pollingResultInterfaces.filter { pollingWriteResults[$0.key] != nil }
         dpiBusyIDs = Set(dpiRequests.keys)
         dpiErrors = dpiErrors.filter { current[$0.key] != nil }
         dpiWriteResults = dpiWriteResults.filter { id, result in
@@ -530,7 +649,7 @@ public final class DeviceManager: ObservableObject {
     }
 
     public func isDeviceBusy(_ id: String) -> Bool {
-        operations.isBusy(id) || pendingDPIChanges[id] != nil
+        operations.isBusy(id) || pendingDPIChanges[id] != nil || pendingPollingChanges[id] != nil
     }
 
     public func batterySummary(for device: DeviceInfo) -> MenuBatterySummary? {
@@ -589,7 +708,7 @@ public final class DeviceManager: ObservableObject {
 
     private func beginRead(_ operation: DeviceOperation, for deviceID: String) -> DeviceOperationTicket? {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !dpiBusyIDs.contains(deviceID),
-              pendingDPIChanges[deviceID] == nil,
+              pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
               let ticket = operations.begin(operation, for: deviceID) else { return nil }
         cancelledReadFields[deviceID]?.subtract(operation.fields)
         syncOperationActivity()
@@ -624,6 +743,7 @@ public final class DeviceManager: ObservableObject {
         readingBatteryIDs = ids(.battery)
         readingDeviceIDs = ids(.mouse)
         readingPollingDeviceIDs = ids(.polling)
+        pollingWriteBusyIDs = ids(.pollingPrepare).union(ids(.pollingApply))
         readingChargingDeviceIDs = ids(.charging)
         readingKeyboardPowerIDs = ids(.keyboardBattery).union(ids(.keyboardCharging))
         readingSystemBatteryIDs = ids(.systemBattery)

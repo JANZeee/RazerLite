@@ -73,7 +73,7 @@ struct KeyboardPowerManagerTests {
         #expect(manager.readSummary(for: device.id).state == .deviceResponse)
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(DiagnosticSnapshot.self, from: manager.snapshotData())
-        #expect(snapshot.schemaVersion == 9 && snapshot.mode == "manual-status-queries; no setting commands")
+        #expect(snapshot.schemaVersion == 10 && snapshot.mode == "manual-status-queries; no setting commands")
         #expect(snapshot.keyboardBatteryReadouts?[device.id]?.batteryPercent == 0)
         #expect(snapshot.keyboardChargingReadouts?[device.id]?.chargingState == .notCharging)
         let assessment = AdapterCatalog.assess(device, keyboardBattery: manager.keyboardBatteryReadouts[device.id],

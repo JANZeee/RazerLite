@@ -24,7 +24,9 @@ struct AdapterAssessmentTests {
         let dpi = try #require(assessment.capability("dpi"))
         #expect(dpi.implementation == .implemented && dpi.evidence.level == .hardwareValidated)
         #expect(!dpi.routeAvailable && dpi.session.state == .unavailable)
-        #expect(assessment.capability("pollingWrite")?.implementation == .notImplemented)
+        #expect(assessment.capability("pollingWrite")?.implementation == .implemented)
+        #expect(assessment.capability("pollingWrite")?.evidence.level == .simulationTested)
+        #expect(assessment.capability("pollingWrite")?.routeAvailable == false)
     }
 
     @Test func adapterModelsRemainVisibleEvenWhenAbsentFromUpstreamTable() {
@@ -150,7 +152,7 @@ struct AdapterAssessmentTests {
         let snapshot = DiagnosticSnapshot(interfaces: device.interfaces, activities: [device.id: .init(reading: ["charging"])])
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let result = try decoder.decode(DiagnosticSnapshot.self, from: snapshot.jsonData())
-        #expect(result.schemaVersion == 9 && result.adapterManifests == AdapterManifestCatalog.all)
+        #expect(result.schemaVersion == 10 && result.adapterManifests == AdapterManifestCatalog.all)
         #expect(result.adapterAssessments?[device.id]?.capability("charging")?.session.state == .reading)
         #expect(result.adapterAssessments?[device.id]?.capability("charging")?.evidence.level == .simulationTested)
         #expect(result.connectionCheck != nil)

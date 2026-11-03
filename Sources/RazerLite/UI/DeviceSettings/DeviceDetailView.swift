@@ -124,7 +124,7 @@ struct DevicePageContent: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isReading || isReadingPolling || isReadingCharging || (dpiManager?.isSuspended == true || dpiManager?.drainingOperationIDs.contains(device.id) == true || dpiManager?.readingBatteryIDs.contains(device.id) == true)
-                              || dpiManager?.dpiBusyIDs.contains(device.id) == true || dpiManager?.pendingDPIChanges[device.id] != nil)
+                              || dpiManager?.isDeviceBusy(device.id) == true)
                     .help("手动读取电量与 DPI，不修改设备设置")
                 } else if SystemBatteryService.canRead(device) {
                     Button(action: onReadSystemBattery) {
@@ -173,10 +173,10 @@ struct DevicePageContent: View {
             case .controls:
                 if device.presentation.isKeyboard { LightingPreviewView(state: state) }
                 else {
-                    PerformancePanel(device: device, telemetry: telemetry, polling: polling,
+                    PerformancePanel(device: device, telemetry: telemetry, polling: polling, manager: dpiManager,
                                      isReadingPolling: isReadingPolling,
                                      pollingDisabled: isReading || isReadingCharging || (dpiManager?.isSuspended == true || dpiManager?.drainingOperationIDs.contains(device.id) == true || dpiManager?.readingBatteryIDs.contains(device.id) == true)
-                                        || dpiManager?.dpiBusyIDs.contains(device.id) == true || dpiManager?.pendingDPIChanges[device.id] != nil,
+                                        || dpiManager?.isDeviceBusy(device.id) == true,
                                      onReadPolling: onReadPolling)
                     if let dpiManager, MouseReadService.canRead(device) {
                         DPIEditorView(device: device, manager: dpiManager, selectedProfile: profiles.selectedProfile(for: device))
@@ -244,7 +244,7 @@ struct DevicePageContent: View {
             if ChargingReadService.canRead(device) {
                 ChargingStatusPanel(reading: charging, isReading: isReadingCharging,
                                     disabled: isReading || isReadingPolling || (dpiManager?.isSuspended == true || dpiManager?.drainingOperationIDs.contains(device.id) == true || dpiManager?.readingBatteryIDs.contains(device.id) == true)
-                                        || dpiManager?.dpiBusyIDs.contains(device.id) == true || dpiManager?.pendingDPIChanges[device.id] != nil,
+                                        || dpiManager?.isDeviceBusy(device.id) == true,
                                     onRead: onReadCharging)
             }
             if let manager = dpiManager, KeyboardPowerReadService.canRead(device) {

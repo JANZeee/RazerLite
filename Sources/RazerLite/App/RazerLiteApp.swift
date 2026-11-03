@@ -141,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func mainWindowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               window.identifier?.rawValue == "devices" else { return }
-        manager?.invalidateDPIPlans()
+        manager?.invalidateControlPlans()
         if preferences?.closeBehavior == .quit { NSApp.terminate(nil) }
     }
     func applicationDidFinishLaunching(_ notification: Notification) {

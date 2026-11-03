@@ -76,6 +76,7 @@ public final class OfflineScenarioSession: ObservableObject {
             dpiController: OfflineDPIController(services: services),
             systemBatteryReader: OfflineSystemReader(services: services),
             pollingReader: OfflinePollingReader(services: services),
+            pollingController: OfflinePollingController(services: services),
             chargingReader: OfflineChargingReader(services: services),
             keyboardPowerReader: OfflineKeyboardReader(services: services), batteryReader: OfflineBatteryReader(services: services), isSimulation: true)
         profiles = ProfileService(storageURL: directory.appendingPathComponent("profiles.json"))
@@ -182,6 +183,7 @@ public final class OfflineScenarioSession: ObservableObject {
 struct OfflineReadContext: Sendable {
     let scenario: OfflineScenario
     let dpi: MouseDPIState
+    let polling: Int
     var issue: MouseReadIssue? {
         switch scenario {
         case .timeout, .receiverOnly:
@@ -199,6 +201,7 @@ struct OfflineReadContext: Sendable {
 actor OfflineServices {
     private var scenario: OfflineScenario = .empty
     private var outcome: OfflineDPIOutcome = .verified
+    private var pollingByDevice: [String: Int] = [:]
     private var dpiByDevice: [String: MouseDPIState] = [:]
     private var pending: [CheckedContinuation<Void, Never>] = []
     private var readWaiters: [CheckedContinuation<Void, Never>] = []
@@ -211,6 +214,7 @@ actor OfflineServices {
         releaseReads()
         scenario = value
         dpiByDevice.removeAll()
+        pollingByDevice.removeAll()
     }
     func releaseReads() {
         let waiting = pending
@@ -223,7 +227,7 @@ actor OfflineServices {
         await withCheckedContinuation { readWaiters.append($0) }
     }
     func read(_ device: DeviceInfo, operation: String) async -> OfflineReadContext {
-        let context = OfflineReadContext(scenario: scenario, dpi: dpiByDevice[device.id] ?? Self.baseline)
+        let context = OfflineReadContext(scenario: scenario, dpi: dpiByDevice[device.id] ?? Self.baseline, polling: pollingByDevice[device.id] ?? 1000)
         operations.append("\(operation):\(device.id)")
         if scenario == .reading {
             await withCheckedContinuation {
@@ -234,6 +238,31 @@ actor OfflineServices {
             }
         }
         return context
+    }
+    func preparePolling(_ device: DeviceInfo, hertz: Int) async throws -> PollingRatePlan {
+        _ = try ViperV4PollingWriteProtocol.code(for: hertz)
+        guard let interface = ViperV4Adapter.controlInterface(in: device) else { throw DeviceQueryError.unavailableInterface }
+        let value = await read(device, operation: "prepare-polling")
+        guard value.issue == nil else { throw DeviceQueryError.malformed("模拟：无法取得回报率基线。") }
+        guard value.polling != hertz else { throw DeviceQueryError.malformed("模拟：目标回报率未变化。") }
+        return PollingRatePlan(deviceID: device.id, deviceName: "模拟 · \(device.product)", before: value.polling,
+            after: hertz, interface: interface, issuedAt: outcome == .expired ? .now.advanced(by: .seconds(-61)) : .now)
+    }
+    func applyPolling(_ plan: PollingRatePlan) async -> PollingRateWriteResult {
+        operations.append("apply-polling:\(plan.deviceID)")
+        guard plan.isUsable, outcome != .notSent, (pollingByDevice[plan.deviceID] ?? 1000) == plan.before,
+              plan.permit.consume() else {
+            plan.invalidate()
+            return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: .notSent,
+                attemptedWrite: false, readback: nil, message: "模拟：计划失效或配置已变化，未发送设置。没有设备通信。")
+        }
+        if outcome == .mismatch {
+            return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: .uncertain,
+                attemptedWrite: true, readback: plan.before, message: "模拟：回报率读回不一致，不自动重试。没有设备通信。")
+        }
+        pollingByDevice[plan.deviceID] = plan.after
+        return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: .verified,
+            attemptedWrite: true, readback: plan.after, message: "模拟：已读回 \(plan.after) Hz 配置。没有设备通信。")
     }
     func prepare(_ device: DeviceInfo, x: Int, y: Int) throws -> MouseDPIPlan {
         operations.append("prepare:\(device.id)")
@@ -292,7 +321,7 @@ private struct OfflinePollingReader: MousePollingReadingService {
     func read(_ device: DeviceInfo) async -> MousePollingReading {
         let value = await services.read(device, operation: "polling")
         return MousePollingReading(deviceID: device.id, interfaceID: MouseReadService.interfaceID(for: device),
-            readAt: Date(), configuredHertz: value.issue == nil ? 1000 : nil, issue: value.issue)
+            readAt: Date(), configuredHertz: value.issue == nil ? value.polling : nil, issue: value.issue)
     }
 }
 private struct OfflineChargingReader: MouseChargingReadingService {
@@ -319,6 +348,13 @@ private struct OfflineSystemReader: SystemBatteryReadingService {
         return SystemBatteryReading(deviceID: device.id, interfaceIDs: device.interfaces.map(\.id).sorted(), acquiredAt: Date(),
             percent: 0, source: .macOSBluetoothSnapshot, issue: nil)
     }
+}
+private struct OfflinePollingController: PollingRateControlling {
+    let services: OfflineServices
+    func prepare(_ device: DeviceInfo, hertz: Int) async throws -> PollingRatePlan {
+        try await services.preparePolling(device, hertz: hertz)
+    }
+    func apply(_ plan: PollingRatePlan) async -> PollingRateWriteResult { await services.applyPolling(plan) }
 }
 private struct OfflineDPIController: MouseDPIControlling {
     let services: OfflineServices

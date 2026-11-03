@@ -8,21 +8,6 @@ public struct MouseDPIStageChange: Equatable, Sendable {
     public init(stage: Int, x: Int, y: Int) { self.stage = stage; self.x = x; self.y = y }
 }
 
-/// Only an issued, uncancelled plan can grant a single write attempt.
-final class DPIWritePermit: @unchecked Sendable {
-    private let lock = NSLock()
-    private var valid = true
-    private var used = false
-    var isUsable: Bool { lock.lock(); defer { lock.unlock() }; return valid && !used }
-    func invalidate() { lock.lock(); defer { lock.unlock() }; valid = false }
-    func consume() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard valid && !used else { return false }
-        used = true
-        return true
-    }
-}
-
 public struct MouseDPIPlan: Identifiable, Sendable {
     public let id = UUID()
     public let deviceID: String
@@ -32,7 +17,7 @@ public struct MouseDPIPlan: Identifiable, Sendable {
     public let createdAt = Date()
     let interface: HIDInterface
     let issuedAt: ContinuousClock.Instant
-    let permit = DPIWritePermit()
+    let permit = DeviceWritePermit()
     public var changedStages: [Int] {
         before.stages.indices.filter { before.stages[$0] != after.stages[$0] }.map { $0 + 1 }
     }

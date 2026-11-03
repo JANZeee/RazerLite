@@ -11,6 +11,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
     public let devices: [DeviceInfo]
     public let mouseReadouts: [String: MouseTelemetry]?
     public let batteryReadouts: [String: BatteryReading]?
+    public let pollingWriteResults: [String: PollingRateWriteResult]?
     public let dpiWriteResults: [String: MouseDPIWriteResult]?
     public let systemBatteryReadings: [String: SystemBatteryReading]?
     public let pollingReadouts: [String: MousePollingReading]?
@@ -24,7 +25,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
     public let connectionCheck: ConnectionCheckReport?
 
     public init(interfaces: [HIDInterface], batteryReadouts: [String: BatteryReading] = [:], mouseReadouts: [String: MouseTelemetry] = [:],
-                dpiWriteResults: [String: MouseDPIWriteResult] = [:], systemBatteryReadings: [String: SystemBatteryReading] = [:],
+                dpiWriteResults: [String: MouseDPIWriteResult] = [:], pollingWriteResults: [String: PollingRateWriteResult] = [:], systemBatteryReadings: [String: SystemBatteryReading] = [:],
                 pollingReadouts: [String: MousePollingReading] = [:],
                 chargingReadouts: [String: MouseChargingReading] = [:],
                 keyboardBatteryReadouts: [String: KeyboardPowerReading] = [:],
@@ -33,13 +34,13 @@ public struct DiagnosticSnapshot: Codable, Sendable {
                 activities: [String: CapabilityActivity] = [:], isMonitoring: Bool = true, isSuspended: Bool = false,
                 queriesRequested: Bool = false, systemMetadataRequested: Bool = false,
                 automaticBatteryRequested: Bool = false, settingRequested: Bool = false, simulation: Bool = false) {
-        schemaVersion = 9
-        applicationVersion = "0.11.0-dpi-stages"
+        schemaVersion = 10
+        applicationVersion = "0.11.1-polling-control"
         generatedAt = Date()
         operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
         dataOrigin = simulation ? "synthetic-development-fixtures; not hardware evidence" : nil
         mode = simulation ? "simulation-only; no device communication"
-            : settingRequested || !dpiWriteResults.isEmpty ? "manual-device-operations; see dpiWriteResults when complete"
+            : settingRequested || !dpiWriteResults.isEmpty || !pollingWriteResults.isEmpty ? "manual-device-operations; see dpiWriteResults and pollingWriteResults when complete"
             : automaticBatteryRequested ? "opt-in-battery-and-manual-reads; no setting commands"
             : queriesRequested || !mouseReadouts.isEmpty || !pollingReadouts.isEmpty || !chargingReadouts.isEmpty
                 || !keyboardBatteryReadouts.isEmpty || !keyboardChargingReadouts.isEmpty ? "manual-status-queries; no setting commands"
@@ -48,6 +49,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
         devices = DeviceInfo.group(interfaces)
         self.mouseReadouts = mouseReadouts.isEmpty ? nil : mouseReadouts
         self.batteryReadouts = batteryReadouts.isEmpty ? nil : batteryReadouts
+        self.pollingWriteResults = pollingWriteResults.isEmpty ? nil : pollingWriteResults
         self.dpiWriteResults = dpiWriteResults.isEmpty ? nil : dpiWriteResults
         self.systemBatteryReadings = systemBatteryReadings.isEmpty ? nil : systemBatteryReadings
         self.pollingReadouts = pollingReadouts.isEmpty ? nil : pollingReadouts
@@ -68,7 +70,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
             (device.id, AdapterCatalog.assess(device, battery: batteryReadouts[device.id], telemetry: mouseReadouts[device.id], systemBattery: systemBatteryReadings[device.id],
                 polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
                 keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id],
-                activity: activities[device.id] ?? .init(isSuspended: isSuspended), dpiWrite: dpiWriteResults[device.id], simulation: simulation))
+                activity: activities[device.id] ?? .init(isSuspended: isSuspended), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id], simulation: simulation))
         })
         adapterAssessments = assessments
         connectionCheck = .assess(devices: devices, assessments: assessments, isMonitoring: isMonitoring, isSuspended: isSuspended)
