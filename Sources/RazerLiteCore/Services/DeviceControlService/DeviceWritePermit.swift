@@ -14,4 +14,3 @@ final class DeviceWritePermit: @unchecked Sendable {
         return true
     }
 }
-
