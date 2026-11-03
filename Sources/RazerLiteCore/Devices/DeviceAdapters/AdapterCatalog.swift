@@ -109,13 +109,14 @@ public struct AdapterAssessment: Codable, Equatable, Sendable {
 /// A pure evidence/status projection shared by UI, menu, CLI and diagnostic export.
 /// It never discovers devices, executes reports or promotes synthetic results to hardware evidence.
 public enum AdapterCatalog {
-    /// UI reference list includes reviewed adapters absent from the pinned upstream model table.
+    /// UI references include local observations and reviewed adapters absent from upstream.
     /// RazerModelCatalog remains unchanged and neither list grants device access.
     public static let modelEntries: [RazerModelReference] = {
         var entries = RazerModelCatalog.entries
+        entries += ObservedModelCatalog.entries.filter { observed in !entries.contains { $0.productID == observed.productID } }
         for manifest in AdapterManifestCatalog.all where manifest.vendorIDs == [0x1532] && manifest.transports.contains("USB") {
             for pid in manifest.productIDs where !entries.contains(where: { $0.productID == pid }) {
-                entries.append(.init(productID: pid, name: "Razer \(manifest.name)", kind: manifest.deviceKind))
+                entries.append(.init(productID: pid, name: "Razer \(manifest.name)", kind: manifest.deviceKind, source: .adapterManifest))
             }
         }
         return entries.sorted { $0.productID < $1.productID }
@@ -261,7 +262,7 @@ public enum AdapterCatalog {
         } else if manifest != nil { connection = "使用系统蓝牙电量后端；按精确身份关联，不套用 USB 私有协议。" }
         else { connection = "仅显示系统属性与型号参考；此连接没有可执行私有查询适配器。" }
         return .init(adapterID: manifest?.id, adapterName: manifest?.name ?? (device.isVirtual ? "虚拟 HID · 仅诊断" : "通用 HID · 仅系统属性"),
-            connectionEvidence: connection, sourceURL: manifest?.sources.first?.url ?? device.modelReference.map { _ in RazerModelCatalog.sourceURL },
+            connectionEvidence: connection, sourceURL: manifest?.sources.first?.url ?? device.modelReference?.source.url,
             interfaceMatched: matched, firmwareScope: manifest?.firmwareScope ?? "真实固件未查询；版本属性不等同于固件版本。",
             dataOrigin: simulation ? "simulation-only; not hardware evidence" : "current-session; historical evidence is scoped separately",
             capabilities: capabilities)

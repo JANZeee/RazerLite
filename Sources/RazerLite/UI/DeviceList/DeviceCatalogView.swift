@@ -34,7 +34,7 @@ struct DeviceCatalogView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("设备目录").font(.system(size: 25, weight: .semibold)).tracking(-0.5)
-                    Text("\(RazerModelCatalog.entries.count) 个上游型号参考 · 内置 USB 适配另行标注")
+                    Text("\(RazerModelCatalog.entries.count) 个上游参考 · \(ObservedModelCatalog.entries.count) 个本机识别记录")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -77,7 +77,7 @@ struct DeviceCatalogView: View {
                                 }.joined(separator: " · "))
                                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
                             } else {
-                                Text("型号参考 · 此 USB 型号尚无控制适配")
+                                Text("\(entry.source.title) · 尚无控制适配")
                                     .font(.system(size: 10)).foregroundStyle(.tertiary)
                             }
                         }
@@ -108,6 +108,9 @@ struct DeviceCatalogView: View {
     }
 
     private func connectedDevices(_ entry: RazerModelReference) -> [DeviceInfo] {
-        manager.physicalDevices.filter { $0.vendorID == 0x1532 && $0.productID == entry.productID }
+        manager.physicalDevices.filter {
+            $0.vendorID == 0x1532 && $0.productID == entry.productID && $0.transport == "USB"
+                && (entry.source != .localObservation || $0.modelReference?.productID == entry.productID)
+        }
     }
 }

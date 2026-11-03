@@ -4,7 +4,7 @@ import Foundation
 
 /// Development fixtures only. Every dependency is explicitly replaced; no live fallback.
 public enum OfflineScenario: String, CaseIterable, Identifiable, Sendable {
-    case empty, mouse, keyboard, bluetooth, unknown, twinMice, unread, reading
+    case empty, mouse, keyboard, observedKeyboard, bluetooth, unknown, twinMice, unread, reading
     case partial, timeout, permissionDenied, receiverOnly, retryFailed
     public var id: String { rawValue }
     public var title: String {
@@ -12,6 +12,7 @@ public enum OfflineScenario: String, CaseIterable, Identifiable, Sendable {
         case .empty: "无设备"
         case .mouse: "鼠标 · 完整读数"
         case .keyboard: "键盘 · 0% 电量"
+        case .observedKeyboard: "Reclusa · 仅识别"
         case .bluetooth: "蓝牙 · 系统缓存"
         case .unknown: "未知型号 · 长名称"
         case .twinMice: "两台同型号鼠标"
@@ -103,7 +104,7 @@ public final class OfflineScenarioSession: ObservableObject {
             do { _ = try profiles.save(name: "模拟 · 办公", for: mouse, x: 1600, y: 1600) }
             catch { manager.reportError("模拟档案创建失败：\(error.localizedDescription)") }
         }
-        guard next != .unread && next != .empty && next != .unknown else { return }
+        guard next != .unread && next != .empty && next != .unknown && next != .observedKeyboard else { return }
         // Publish through the same manager lifecycle as ordinary user reads.
         for device in manager.devices {
             guard token == generation else { return }
@@ -168,6 +169,13 @@ public final class OfflineScenarioSession: ObservableObject {
         case .keyboard:
             return [interface(10, pid: 0x02D2, name: "Razer BlackWidow V4 Low-profile TKL HyperSpeed",
                               number: 2, page: 1, usage: 2, input: 8, feature: 90)]
+        case .observedKeyboard:
+            return [
+                interface(10, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 0, page: 1, usage: 2, input: 8, feature: 0),
+                interface(11, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 1, page: 1, usage: 6, input: 48, feature: 1),
+                interface(12, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 2, page: 1, usage: 6, input: 8, feature: 0),
+                interface(13, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 3, page: 12, usage: 1, input: 0, feature: 90)
+            ]
         case .bluetooth:
             return [interface(10, pid: 0x00D5, name: "BSK MOBILE", number: 0, page: 1, usage: 2, input: 8, feature: 0, bluetooth: true)]
         case .unknown:

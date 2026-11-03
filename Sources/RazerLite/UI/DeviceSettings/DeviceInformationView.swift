@@ -14,6 +14,9 @@ struct DeviceInformationView: View {
                     field("产品名称", device.product)
                     field("VID / PID", "\(hexID(device.vendorID)) / \(hexID(device.productID))")
                     field("连接方式", device.transport)
+                    if let reference = device.modelReference {
+                        field("型号依据", reference.source.title)
+                    }
                     field("固件版本", "尚未查询")
                     Text(assessment.connectionEvidence).font(.system(size: 11)).foregroundStyle(.secondary).lineSpacing(4)
                 }
@@ -46,7 +49,7 @@ struct DeviceInformationView: View {
                                 Text(source.revision ?? "Apple 系统 API 文档，无提交版本").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                             }
                         } else if let url = assessment.sourceURL {
-                            Link("型号目录来源 ↗", destination: url).font(.caption)
+                            Link("\(device.modelReference?.source.title ?? "型号来源") ↗", destination: url).font(.caption)
                         }
                     }.padding(.top, 16)
                 }.font(.system(size: 12, weight: .medium))

@@ -55,7 +55,8 @@ public struct DeviceInfo: Codable, Equatable, Identifiable, Sendable {
 
     public var modelReference: RazerModelReference? {
         guard !isVirtual else { return nil }
-        return RazerModelCatalog.lookup(vendorID: vendorID, productID: productID)
+        return ObservedModelCatalog.lookup(self)
+            ?? RazerModelCatalog.lookup(vendorID: vendorID, productID: productID)
     }
 
     /// Presentation classification only. Never used to select a private command.

@@ -32,6 +32,32 @@ public struct RazerModelReference: Identifiable, Sendable {
     public let productID: Int
     public let name: String
     public let kind: RazerDeviceKind
+    public let source: ModelReferenceSource
+
+    init(productID: Int, name: String, kind: RazerDeviceKind, source: ModelReferenceSource = .openRazer) {
+        self.productID = productID; self.name = name; self.kind = kind; self.source = source
+    }
+}
+
+/// Identity evidence only. It never grants access to a device control route.
+public enum ModelReferenceSource: Sendable {
+    case openRazer, localObservation, adapterManifest
+
+    public var title: String {
+        switch self {
+        case .openRazer: "OpenRazer 型号参考"
+        case .localObservation: "本机 USB 识别记录"
+        case .adapterManifest: "内置适配清单"
+        }
+    }
+
+    public var url: URL {
+        switch self {
+        case .openRazer: RazerModelCatalog.sourceURL
+        case .localObservation: URL(string: "https://github.com/JANZeee/RazerLite/blob/main/docs/PHASE0112_RECLUSA_IDENTITY.md")!
+        case .adapterManifest: URL(string: "https://github.com/JANZeee/RazerLite/blob/main/Sources/RazerLiteCore/Devices/DeviceAdapters/AdapterManifest.swift")!
+        }
+    }
 }
 
 public enum RazerModelCatalog {
