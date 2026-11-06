@@ -6,6 +6,7 @@ struct DeviceNavigationRequest: Identifiable {
     let id = UUID()
     let deviceID: String
     let page: DevicePage
+    var profileLoad: DPIProfileLoadRequest? = nil
 }
 
 /// Only the top-level ordinary page is restored. Registry IDs and detail
@@ -30,5 +31,14 @@ final class AppWorkspace: ObservableObject {
         section = .devices
         selectedDeviceID = device.id
         navigationRequest = DeviceNavigationRequest(deviceID: device.id, page: page)
+    }
+
+    /// Called only after the local profile selection succeeds. A new request
+    /// makes choosing the same preset again an explicit draft replacement.
+    func loadProfile(_ profile: MouseDPIProfile, for device: DeviceInfo) {
+        section = .devices
+        selectedDeviceID = device.id
+        navigationRequest = DeviceNavigationRequest(deviceID: device.id, page: .controls,
+            profileLoad: DPIProfileLoadRequest(profile: profile))
     }
 }

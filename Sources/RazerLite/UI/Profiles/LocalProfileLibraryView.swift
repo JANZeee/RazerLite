@@ -105,12 +105,13 @@ struct LocalProfileLibraryView: View {
                 }
             case let .target(profile):
                 ProfileTargetPicker(profile: profile, manager: manager) { id in
-                    guard let device = manager.devices.first(where: { $0.id == id && profile.target.matches($0) }), !manager.isSuspended else {
+                    guard let device = manager.devices.first(where: { $0.id == id && profile.target.matches($0) }),
+                          !manager.isSuspended, !manager.isDeviceBusy(device.id) else {
                         throw ProfileLibraryError.profileDoesNotMatchDevice
                     }
                     try profiles.select(profile, for: device)
                     state.sheet = nil
-                    workspace.select(device, page: .controls)
+                    workspace.loadProfile(profile, for: device)
                 }
             case .importing:
                 LocalProfileImportSheet(profiles: profiles) { result in
@@ -145,7 +146,7 @@ struct LocalProfileLibraryView: View {
                 Spacer(minLength: 8)
                 if profiles.selectedProfileIDs[profile.target.storageKey] == profile.id { SmallBadge(title: "本地已选") }
                 Button("载入编辑器…") { state.sheet = .target(profile) }
-                    .disabled(!profiles.canModify || manager.isSuspended || !manager.devices.contains { profile.target.matches($0) })
+                    .disabled(!profiles.canModify || manager.isSuspended || !manager.devices.contains { profile.target.matches($0) && !manager.isDeviceBusy($0.id) })
                     .help("需要匹配的已连接设备；载入不会发送设备命令")
                 Menu {
                     Button("编辑…") { state.sheet = .editor(profile) }
@@ -165,18 +166,32 @@ struct LocalProfileLibraryView: View {
 @MainActor
 private final class ProfileEditorDraft: ObservableObject {
     @Published var name: String
-    @Published var x: String
-    @Published var y: String
+    @Published var input: ViperDPIInput
     @Published var error: String?
     init(_ profile: MouseDPIProfile?) {
         name = profile?.name ?? ""
-        x = String(profile?.x ?? 1600)
-        y = String(profile?.y ?? 1600)
+        input = ViperDPIInput(x: profile?.x ?? 1600, y: profile?.y ?? 1600)
     }
     var values: (Int, Int)? {
-        guard let x = Int(x), let y = Int(y),
-              (try? MouseDPIProfile(name: name, target: .viperV4ProDPI, x: x, y: y)) != nil else { return nil }
-        return (x, y)
+        guard ProfileNameValidation.message(for: name) == nil, let target = input.target else { return nil }
+        return (target.x, target.y)
+    }
+    var dpiValidationMessage: String? {
+        input.target == nil ? input.validationMessage() ?? "请填写 X 和 Y 轴 DPI。" : nil
+    }
+}
+
+/// Shared presentation validation for local profile names. The service still
+/// validates and trims every value before persisting it.
+enum ProfileNameValidation {
+    static func message(for name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "请输入预设名称。" }
+        guard name.rangeOfCharacter(from: .newlines) == nil else { return "名称不能包含换行。" }
+        guard trimmed.count <= MouseDPIProfile.maximumNameLength else {
+            return "名称最多 \(MouseDPIProfile.maximumNameLength) 个字符。"
+        }
+        return nil
     }
 }
 
@@ -197,14 +212,25 @@ private struct LocalProfileEditor: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("名称").font(.caption)
                 TextField("例如：办公 / 游戏", text: $draft.name).textFieldStyle(.roundedBorder).accessibilityLabel("预设名称")
+                if let message = ProfileNameValidation.message(for: draft.name) {
+                    Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
             }
-            HStack(spacing: 20) {
-                dpiField("X 轴 DPI", text: $draft.x)
-                dpiField("Y 轴 DPI", text: $draft.y)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 20) {
+                    dpiField("X 轴 DPI", text: Binding(get: { draft.input.x }, set: { draft.input.editX($0) }))
+                    dpiField("Y 轴 DPI", text: Binding(get: { draft.input.y }, set: { draft.input.editY($0) }))
+                }
+                Toggle("联动 X/Y", isOn: Binding(get: { draft.input.axesLinked }, set: { draft.input.setLinked($0) }))
+                    .toggleStyle(.checkbox)
+                    .help("开启后使用 X 轴值，之后编辑任一轴会同步另一轴")
+                if let message = draft.dpiValidationMessage {
+                    Text(message).font(.system(size: 11)).foregroundStyle(.orange)
+                } else {
+                    Text("100–50,000 DPI · 步进 50").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
             }
-            Text("100–50,000 DPI · 步进 50 · 名称最多 48 字符")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Text("这是本地目标值，不会读取或修改设备。")
+            Text("仅保存到本机。应用到设备时另行确认。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             if let error = draft.error { Text(error).font(.system(size: 12)).foregroundStyle(.red) }
             HStack {
@@ -213,9 +239,11 @@ private struct LocalProfileEditor: View {
                 Button("保存到本地") {
                     guard let (x, y) = draft.values else { return }
                     do { try onSave(draft.name, x, y) } catch { draft.error = error.localizedDescription }
-                }.buttonStyle(.borderedProminent).disabled(draft.values == nil)
+                }.buttonStyle(.borderedProminent).disabled(draft.values == nil).keyboardShortcut(.defaultAction)
             }
         }.padding(28).frame(width: 460)
+        .onChange(of: draft.name) { _ in draft.error = nil }
+        .onChange(of: draft.input) { _ in draft.error = nil }
     }
     private func dpiField(_ title: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -256,7 +284,7 @@ private struct ProfileTargetPicker: View {
                 Button("载入编辑器") {
                     do { try onLoad(state.deviceID) } catch { state.error = error.localizedDescription }
                 }.buttonStyle(.borderedProminent)
-                    .disabled(manager.isSuspended || !devices.contains { $0.id == state.deviceID })
+                    .disabled(manager.isSuspended || !devices.contains { $0.id == state.deviceID && !manager.isDeviceBusy($0.id) })
             }
         }.padding(28).frame(width: 500)
         .onAppear { if devices.count == 1 { state.deviceID = devices[0].id } }

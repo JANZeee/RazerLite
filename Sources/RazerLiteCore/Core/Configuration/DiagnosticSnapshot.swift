@@ -35,7 +35,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
                 queriesRequested: Bool = false, systemMetadataRequested: Bool = false,
                 automaticBatteryRequested: Bool = false, settingRequested: Bool = false, simulation: Bool = false) {
         schemaVersion = 10
-        applicationVersion = "0.11.4-dpi-editing"
+        applicationVersion = "0.11.5-menu-profiles"
         generatedAt = Date()
         operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
         dataOrigin = simulation ? "synthetic-development-fixtures; not hardware evidence" : nil

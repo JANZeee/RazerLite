@@ -15,6 +15,7 @@ struct ProfileLibraryView: View {
     var telemetry: MouseTelemetry?
     @ObservedObject var profiles: ProfileService
     var onOpenLibrary: () -> Void = {}
+    var canLoadIntoEditor = true
     let onLoadIntoEditor: () -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -26,8 +27,11 @@ struct ProfileLibraryView: View {
     private var currentDPI: MouseDPIStage? { telemetry?.dpi?.current }
     private var canSaveCurrent: Bool {
         guard let currentDPI else { return false }
-        return (100...50000).contains(currentDPI.x) && (100...50000).contains(currentDPI.y)
-            && currentDPI.x % 50 == 0 && currentDPI.y % 50 == 0
+        return ViperDPIInput(x: currentDPI.x, y: currentDPI.y).target != nil
+    }
+    private var currentDPIValidationMessage: String? {
+        guard let currentDPI else { return nil }
+        return ViperDPIInput(x: currentDPI.x, y: currentDPI.y).validationMessage()
     }
 
     var body: some View {
@@ -42,19 +46,25 @@ struct ProfileLibraryView: View {
                 SmallBadge(title: "本地 · \(availableProfiles.count) 个", color: theme.accent, dot: true)
             }
 
+            if !profiles.canModify {
+                Label(profiles.lastError ?? "本地档案无法修改，原文件已保留。可在设置中查看存储位置。",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12)).foregroundStyle(.orange).textSelection(.enabled)
+            }
+
             SurfaceCard {
                 VStack(alignment: .leading, spacing: 15) {
                     HStack {
                         Label("保存当前 DPI", systemImage: "plus.circle")
                             .font(.system(size: 13, weight: .medium))
                         Spacer()
-                        SmallBadge(title: canSaveCurrent ? "已读取" : "需要读取状态", color: canSaveCurrent ? theme.accent : .secondary)
+                        SmallBadge(title: currentDPI == nil ? "尚未读取" : "已读取", color: currentDPI == nil ? .secondary : theme.accent)
                     }
                     if let currentDPI {
                         Text("本次读取的当前第 \(telemetry?.dpi?.activeStage ?? 0) 档：X \(currentDPI.x) / Y \(currentDPI.y) DPI")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
-                        if !canSaveCurrent {
-                            Text("当前值不符合 50 DPI 步进，暂不能保存为预设。")
+                        if let message = currentDPIValidationMessage {
+                            Text("\(message) 可在本地档案中新建目标预设。")
                                 .font(.system(size: 10)).foregroundStyle(.orange)
                         }
                     } else {
@@ -64,9 +74,14 @@ struct ProfileLibraryView: View {
                     HStack(spacing: 12) {
                         TextField("例如：办公 / 竞技", text: $state.draftName)
                             .textFieldStyle(.roundedBorder).frame(maxWidth: 280)
+                            .disabled(!profiles.canModify)
+                            .accessibilityLabel("当前 DPI 预设名称")
                         Button("保存到本地") { saveCurrent() }
-                            .disabled(!canSaveCurrent || state.draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(!profiles.canModify || !canSaveCurrent || ProfileNameValidation.message(for: state.draftName) != nil)
                         Spacer(minLength: 0)
+                    }
+                    if profiles.canModify, let message = ProfileNameValidation.message(for: state.draftName) {
+                        Text(message).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -85,8 +100,8 @@ struct ProfileLibraryView: View {
                         VStack(spacing: 9) {
                             Image(systemName: "rectangle.stack.badge.plus").font(.system(size: 25, weight: .light))
                                 .foregroundStyle(.secondary)
-                            Text("还没有本地预设").font(.system(size: 12, weight: .medium))
-                            Text("读取状态后，可从当前 DPI 创建第一个预设。")
+                            Text(profiles.canModify ? "还没有本地预设" : "档案未载入").font(.system(size: 12, weight: .medium))
+                            Text(profiles.canModify ? "可保存当前 DPI，也可在本地档案中新建。" : "原文件已保留，请先检查档案存储。")
                                 .font(.system(size: 10)).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
@@ -99,7 +114,7 @@ struct ProfileLibraryView: View {
 
             HStack(alignment: .top, spacing: 9) {
                 Image(systemName: "lock").font(.system(size: 11)).foregroundStyle(theme.accent)
-                Text("档案仅匹配 Viper V4 Pro 的 VID/PID 与 USB 连接方式。它不保存 registry ID、USB 父节点或写入许可；同型号多接收器共享型号级的本地选择。")
+                Text("适用于 Viper V4 Pro · USB。同型号设备共享本地预设选择。")
                     .font(.system(size: 10)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.padding(.horizontal, 3)
         }
@@ -108,15 +123,16 @@ struct ProfileLibraryView: View {
         .confirmationDialog("删除本地预设？", isPresented: Binding(get: { state.pendingDelete != nil }, set: { if !$0 { state.pendingDelete = nil } })) {
             if let profile = state.pendingDelete {
                 Button("删除「\(profile.name)」", role: .destructive) { delete(profile) }
+                    .disabled(!profiles.canModify)
             }
             Button("取消", role: .cancel) { state.pendingDelete = nil }
         } message: {
-            Text("这只会移除本机 JSON 中的预设，不会向设备发送命令。")
+            Text("仅删除本机预设，不改变设备设置。")
         }
-        .alert("本地档案", isPresented: Binding(get: { state.feedback != nil || profiles.lastError != nil }, set: { value in
-            if !value { state.feedback = nil; profiles.clearError() }
+        .alert("本地档案", isPresented: Binding(get: { state.feedback != nil || (profiles.canModify && profiles.lastError != nil) }, set: { value in
+            if !value { state.feedback = nil; if profiles.canModify { profiles.clearError() } }
         })) {
-            Button("好") { state.feedback = nil; profiles.clearError() }
+            Button("好") { state.feedback = nil; if profiles.canModify { profiles.clearError() } }
         } message: { Text(state.feedback ?? profiles.lastError ?? "未知错误") }
     }
 
@@ -133,9 +149,10 @@ struct ProfileLibraryView: View {
             Spacer()
             if isSelected { SmallBadge(title: "本地已选", color: theme.accent) }
             Button("载入编辑器") { select(profile) }.controlSize(.small)
+                .disabled(!profiles.canModify || !canLoadIntoEditor)
             Button(role: .destructive) { state.pendingDelete = profile } label: {
                 Image(systemName: "trash").font(.system(size: 11))
-            }.buttonStyle(.borderless).help("删除本地预设")
+            }.buttonStyle(.borderless).help("删除本地预设").disabled(!profiles.canModify)
         }
         .padding(.horizontal, 13).padding(.vertical, 11)
         .background(isSelected ? theme.accent.opacity(0.075) : theme.elevated.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
@@ -157,6 +174,7 @@ struct ProfileLibraryView: View {
     }
 
     private func select(_ profile: MouseDPIProfile) {
+        guard canLoadIntoEditor else { return }
         do {
             try profiles.select(profile, for: device)
             onLoadIntoEditor()

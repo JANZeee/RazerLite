@@ -13,24 +13,8 @@ struct MenuBarView: View {
         ForEach(manager.physicalDevices) { device in
             Menu(deviceTitle(device)) {
                 Text("连接：\(device.transport)")
-                Text(manager.adapterAssessment(for: device).readingSummary)
-                if let battery = batterySummary(device) {
-                    Text("电量：\(battery.percent)% · \(battery.source)")
-                    Text("取得于 \(battery.acquiredAt.formatted(date: .abbreviated, time: .shortened))")
-                } else if let previous = manager.adapterAssessment(for: device).capabilities
-                    .first(where: { $0.id == "battery" })?.session.previous {
-                    Text("上次电量：\(previous.value) · 历史值")
-                    Text("\(previous.at.formatted(date: .abbreviated, time: .shortened)) · \(previous.source)")
-                } else {
-                    Text("电量未取得")
-                }
-                if !DeviceReadRegistry.backends(for: device).isEmpty {
-                    Button(manager.capabilityActivity(for: device.id).reading.contains("battery") ? "正在读取电量…"
-                        : SystemBatteryService.canRead(device) ? "读取系统电量"
-                        : KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量") {
-                        Task { await manager.readBattery(for: device.id) }
-                    }.disabled(manager.isDeviceBusy(device.id) || manager.isSuspended)
-                }
+                batteryItems(for: device)
+                Divider()
                 Button("打开设备详情") {
                     workspace.select(device)
                     openWindow(id: "devices")
@@ -73,11 +57,45 @@ struct MenuBarView: View {
     private func batterySummary(_ device: DeviceInfo) -> MenuBatterySummary? { manager.batterySummary(for: device) }
 
     @ViewBuilder
+    private func batteryItems(for device: DeviceInfo) -> some View {
+        let capability = manager.adapterAssessment(for: device).capability("battery")
+        if let capability, capability.implementation == .implemented {
+            if let battery = batterySummary(device) {
+                Text("电量：\(battery.percent)% · \(battery.source)")
+                Text("取得于 \(battery.acquiredAt.formatted(date: .abbreviated, time: .shortened))")
+            } else {
+                Text("电量：\(capability.session.state.title)\(capability.session.state == .failed ? capability.session.failureKind.map { " · \($0.title)" } ?? "" : "")")
+                if let previous = capability.session.previous {
+                    Text("上次电量：\(previous.value) · 历史值")
+                    Text("\(previous.at.formatted(date: .abbreviated, time: .shortened)) · \(previous.source)")
+                }
+            }
+            if capability.routeAvailable {
+                Button(batteryActionTitle(for: device, session: capability.session)) {
+                    Task { await manager.readBattery(for: device.id) }
+                }.disabled(manager.isDeviceBusy(device.id) || manager.isSuspended || !manager.isMonitoring)
+            }
+        } else {
+            Text("电量读取尚未适配")
+        }
+    }
+
+    private func batteryActionTitle(for device: DeviceInfo, session: CapabilitySession) -> String {
+        if session.state == .reading { return "正在读取电量…" }
+        let retry = session.state == .failed || session.state == .cancelled
+        if SystemBatteryService.canRead(device) { return retry ? "重试读取系统电量" : "读取系统电量" }
+        if KeyboardPowerReadService.canRead(device) { return retry ? "重试电量试读" : "试读电量" }
+        return retry ? "重试读取电量" : "读取电量"
+    }
+
+    @ViewBuilder
     private var localProfilesMenu: some View {
         let supported = manager.physicalDevices.filter { ProfileDeviceTarget(device: $0) != nil }
-        if !supported.isEmpty {
-            Divider()
-            Menu("本地 DPI 档案") {
+        Divider()
+        Menu("本地 DPI 档案") {
+            if !profiles.canModify {
+                Text("本地档案不可用，请打开档案查看原因")
+            } else {
                 ForEach(supported) { device in
                     let options = profiles.profiles(for: device)
                     if options.isEmpty {
@@ -93,11 +111,16 @@ struct MenuBarView: View {
                                     } else {
                                         Text(profileTitle(profile))
                                     }
-                                }
+                                }.disabled(manager.isSuspended || manager.isDeviceBusy(device.id))
                             }
                         }
                     }
                 }
+            }
+            if !supported.isEmpty { Divider() }
+            Button("管理本地档案…") {
+                workspace.section = .profiles
+                openDeviceWindow()
             }
         }
     }
@@ -109,12 +132,25 @@ struct MenuBarView: View {
 
     private func select(_ profile: MouseDPIProfile, for device: DeviceInfo) {
         do {
-            try profiles.select(profile, for: device)
-            workspace.select(device, page: .controls)
-            openWindow(id: "devices")
-            NSApp.activate(ignoringOtherApps: true)
+            guard let current = manager.physicalDevices.first(where: { $0.id == device.id }),
+                  profile.target.matches(current) else { throw ProfileLibraryError.profileDoesNotMatchDevice }
+            guard !manager.isSuspended, !manager.isDeviceBusy(current.id) else {
+                manager.reportError("设备正在处理其他操作，请稍后载入预设。")
+                openDeviceWindow()
+                return
+            }
+            try profiles.select(profile, for: current)
+            workspace.loadProfile(profile, for: current)
+            openDeviceWindow()
         } catch {
-            // ProfileService exposes the failure in the main window on the next open.
+            workspace.section = .profiles
+            manager.reportError("预设未载入：\(error.localizedDescription)")
+            openDeviceWindow()
         }
+    }
+
+    private func openDeviceWindow() {
+        openWindow(id: "devices")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

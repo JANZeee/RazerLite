@@ -3,19 +3,19 @@ import RazerLiteCore
 
 @MainActor
 final class DPIEditorState: ObservableObject {
-    @Published var input = ViperDPIInput()
-    var loadedProfileID: UUID?
+    @Published var draft = DPIProfileDraft()
 }
 
 struct DPIEditorView: View {
     let device: DeviceInfo
     @ObservedObject var manager: DeviceManager
     let selectedProfile: MouseDPIProfile?
+    var profileLoadRequest: DPIProfileLoadRequest? = nil
     @StateObject private var editor = DPIEditorState()
     @Environment(\.colorScheme) private var scheme
     private var busy: Bool { manager.isSuspended || manager.isDeviceBusy(device.id) }
     private var current: MouseDPIStage? { manager.mouseReadouts[device.id]?.dpi?.current }
-    private var unchanged: Bool { current.map { editor.input.matches($0) } ?? false }
+    private var unchanged: Bool { current.map { editor.draft.input.matches($0) } ?? false }
 
     var body: some View {
         SurfaceCard {
@@ -40,26 +40,26 @@ struct DPIEditorView: View {
                 Text("修改当前档位，或展开下方编辑全部档位。")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
-                    Toggle("联动 X/Y", isOn: Binding(get: { editor.input.axesLinked }, set: { editor.input.setLinked($0) }))
+                    Toggle("联动 X/Y", isOn: Binding(get: { editor.draft.input.axesLinked }, set: { editor.draft.input.setLinked($0) }))
                         .toggleStyle(.checkbox).font(.system(size: 11))
                         .help("开启时将 Y 设为 X，之后编辑任一轴同步两轴；仅修改草稿。")
                     Spacer()
                     Button("载入当前值") {
                         guard let current else { return }
-                        editor.input = ViperDPIInput(x: current.x, y: current.y)
+                        editor.draft.input = ViperDPIInput(x: current.x, y: current.y)
                     }.disabled(current == nil).font(.system(size: 11))
                         .help("载入已读取的当前档位，不发送设备查询；替换当前输入。")
                 }.disabled(busy)
                 HStack(spacing: 18) {
-                    axisField("X 轴 DPI", text: Binding(get: { editor.input.x }, set: { editor.input.editX($0) }))
-                    axisField("Y 轴 DPI", text: Binding(get: { editor.input.y }, set: { editor.input.editY($0) }))
+                    axisField("X 轴 DPI", text: Binding(get: { editor.draft.input.x }, set: { editor.draft.input.editX($0) }))
+                    axisField("Y 轴 DPI", text: Binding(get: { editor.draft.input.y }, set: { editor.draft.input.editY($0) }))
                     Spacer(minLength: 0)
                     Button(busy ? "正在处理…" : "检查变更…") {
-                        guard let target = editor.input.target else { return }
+                        guard let target = editor.draft.input.target else { return }
                         Task { await manager.prepareDPIChange(for: device.id, x: target.x, y: target.y) }
-                    }.disabled(busy || unchanged || editor.input.target == nil).controlSize(.large)
+                    }.disabled(busy || unchanged || editor.draft.input.target == nil).controlSize(.large)
                 }.disabled(busy)
-                if let message = editor.input.validationMessage(preserving: current) {
+                if let message = editor.draft.input.validationMessage(preserving: current) {
                     Text(message).font(.system(size: 11)).foregroundStyle(.orange)
                 } else if unchanged {
                     Text("与已读取的当前值相同。")
@@ -91,6 +91,7 @@ struct DPIEditorView: View {
         }
         .onAppear { synchronizeSelectedProfile() }
         .onChange(of: selectedProfile?.id) { _ in synchronizeSelectedProfile() }
+        .onChange(of: profileLoadRequest?.id) { _ in synchronizeSelectedProfile() }
         .onDisappear { manager.cancelDPIChange(for: device.id) }
     }
 
@@ -103,17 +104,15 @@ struct DPIEditorView: View {
     }
 
     private func synchronizeSelectedProfile() {
-        guard let selectedProfile, editor.loadedProfileID != selectedProfile.id else { return }
-        load(selectedProfile)
+        editor.draft.synchronize(profile: selectedProfile, request: profileLoadRequest, isBusy: busy)
     }
 
     private func matchesProfile(_ profile: MouseDPIProfile) -> Bool {
-        editor.loadedProfileID == profile.id && Int(editor.input.x) == profile.x && Int(editor.input.y) == profile.y
+        editor.draft.loadedProfileID == profile.id && Int(editor.draft.input.x) == profile.x && Int(editor.draft.input.y) == profile.y
     }
 
     private func load(_ profile: MouseDPIProfile) {
-        editor.input = ViperDPIInput(x: profile.x, y: profile.y)
-        editor.loadedProfileID = profile.id
+        editor.draft.reload(profile, isBusy: busy)
     }
 }
 

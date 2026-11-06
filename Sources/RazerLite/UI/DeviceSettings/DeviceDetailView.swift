@@ -3,7 +3,10 @@ import RazerLiteCore
 
 @MainActor
 final class DeviceDetailState: ObservableObject {
-    @Published var page = DevicePage.overview
+    @Published var page = DevicePage.overview {
+        didSet { if page != .controls { profileLoadRequest = nil } }
+    }
+    @Published var profileLoadRequest: DPIProfileLoadRequest?
     @Published var previewBrightness = 0.70
     @Published var previewColorIndex = 0
     static let colors: [(String, Color)] = [
@@ -39,10 +42,17 @@ struct DeviceDetailView: View {
                               dpiManager: manager, profiles: profiles, onOpenProfileLibrary: { workspace.section = .profiles })
                 .padding(28).frame(maxWidth: 1060).frame(maxWidth: .infinity)
         }.background(RazerTheme(scheme: scheme).canvas)
-        .onReceive(workspace.$navigationRequest) { request in
-            guard let request, request.deviceID == device.id else { return }
-            state.page = request.page
-        }
+        .onAppear { consumeNavigationRequest() }
+        .onChange(of: workspace.navigationRequest?.id) { _ in consumeNavigationRequest() }
+    }
+
+    private func consumeNavigationRequest() {
+        // Read after publication: @Published's publisher emits before the
+        // stored property changes, so consuming it inside onReceive can race.
+        guard let request = workspace.navigationRequest, request.deviceID == device.id else { return }
+        state.profileLoadRequest = request.profileLoad
+        state.page = request.page
+        workspace.navigationRequest = nil
     }
 }
 
@@ -141,7 +151,10 @@ struct DevicePageContent: View {
             }.font(.system(size: 12))
             HStack(spacing: 5) {
                 ForEach(pages, id: \.self) { page in
-                    Button { state.page = page } label: {
+                    Button {
+                        state.profileLoadRequest = nil
+                        state.page = page
+                    } label: {
                         Text(page.title(for: device)).font(.system(size: 12, weight: selectedPage == page ? .semibold : .regular))
                             .foregroundStyle(selectedPage == page ? Color.primary : Color.secondary)
                             .padding(.horizontal, 18).padding(.vertical, 9)
@@ -179,13 +192,20 @@ struct DevicePageContent: View {
                                         || dpiManager?.isDeviceBusy(device.id) == true,
                                      onReadPolling: onReadPolling)
                     if let dpiManager, MouseReadService.canRead(device) {
-                        DPIEditorView(device: device, manager: dpiManager, selectedProfile: profiles.selectedProfile(for: device))
+                        DPIEditorView(device: device, manager: dpiManager, selectedProfile: profiles.selectedProfile(for: device),
+                                      profileLoadRequest: state.profileLoadRequest)
                     }
                 }
             case .buttons: ButtonMappingPanel()
             case .profiles:
                 if ProfileDeviceTarget(device: device) != nil {
-                    ProfileLibraryView(device: device, telemetry: telemetry, profiles: profiles, onOpenLibrary: onOpenProfileLibrary) { state.page = .controls }
+                    ProfileLibraryView(device: device, telemetry: telemetry, profiles: profiles, onOpenLibrary: onOpenProfileLibrary,
+                                       canLoadIntoEditor: dpiManager?.isSuspended != true && dpiManager?.isDeviceBusy(device.id) != true) {
+                        if let profile = profiles.selectedProfile(for: device) {
+                            state.profileLoadRequest = DPIProfileLoadRequest(profile: profile)
+                        }
+                        state.page = .controls
+                    }
                 } else {
                     ProfileUnavailableView(device: device)
                 }
