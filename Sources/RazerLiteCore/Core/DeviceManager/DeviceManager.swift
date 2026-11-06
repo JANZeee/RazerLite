@@ -371,13 +371,19 @@ public final class DeviceManager: ObservableObject {
     }
 
     private func prepareDPIChange(for deviceID: String, prepare: (DeviceInfo) async throws -> MouseDPIPlan) async {
-        guard isMonitoring, !isSuspended, !operations.isBusy(deviceID),
+        guard isMonitoring, !isSuspended, !Task.isCancelled, !operations.isBusy(deviceID),
               dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
               let device = devices.first(where: { $0.id == deviceID }),
               let interface = ViperV4Adapter.controlInterface(in: device),
               let ticket = operations.begin(.dpiPrepare, for: deviceID) else { return }
-        defer { finishOperation(ticket) }
         let token = UUID()
+        defer {
+            if dpiRequests[deviceID]?.token == token {
+                dpiRequests.removeValue(forKey: deviceID)
+                dpiBusyIDs.remove(deviceID)
+            }
+            finishOperation(ticket)
+        }
         dpiRequests[deviceID] = (token, interface)
         dpiBusyIDs.insert(deviceID)
         dpiErrors.removeValue(forKey: deviceID)
@@ -387,10 +393,16 @@ public final class DeviceManager: ObservableObject {
         mouseReadouts.removeValue(forKey: deviceID)
         mouseReadingInterfaces.removeValue(forKey: deviceID)
         do {
-            let plan = try await prepare(device)
+            let plan = try await withTaskCancellationHandler {
+                try await prepare(device)
+            } onCancel: {
+                Task { @MainActor [weak self] in
+                    guard let self, self.operations.isCurrent(ticket) else { return }
+                    self.cancelDPIChange(for: deviceID)
+                }
+            }
             guard isMonitoring, !Task.isCancelled, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else {
                 plan.invalidate()
-                if dpiRequests[deviceID]?.token == token { dpiRequests.removeValue(forKey: deviceID); dpiBusyIDs.remove(deviceID) }
                 return
             }
             guard plan.deviceID == deviceID, ViperV4Adapter.isSameInterface(plan.interface, expected: interface) else {
@@ -404,26 +416,37 @@ public final class DeviceManager: ObservableObject {
             rememberSuccessfulReadings(for: device, fields: ["dpi", "stages"])
             record("\(device.product) DPI 变更已准备；等候用户确认，尚未写入。")
         } catch {
-            guard dpiRequests[deviceID]?.token == token else { return }
+            guard !Task.isCancelled, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
             dpiErrors[deviceID] = error.localizedDescription
             record("DPI 准备失败：\(error.localizedDescription)", isError: true, presentError: false)
         }
-        dpiRequests.removeValue(forKey: deviceID)
-        dpiBusyIDs.remove(deviceID)
     }
 
     public func cancelDPIChange(for deviceID: String) {
         pendingDPIChanges.removeValue(forKey: deviceID)?.invalidate()
+        if operations.activeOperation(for: deviceID) == .dpiPrepare {
+            operations.cancelActive(for: deviceID)
+            dpiRequests.removeValue(forKey: deviceID)
+            dpiBusyIDs.remove(deviceID)
+            syncOperationActivity()
+        }
     }
 
     /// Called only by the confirmation sheet's explicit write button, with the displayed plan ID.
     public func confirmDPIChange(for deviceID: String, planID: UUID) async {
-        guard isMonitoring, !isSuspended, dpiRequests[deviceID] == nil, !operations.isBusy(deviceID),
+        guard isMonitoring, !isSuspended, !Task.isCancelled, dpiRequests[deviceID] == nil, !operations.isBusy(deviceID),
               let plan = pendingDPIChanges[deviceID], plan.id == planID,
               let ticket = operations.begin(.dpiApply, for: deviceID) else { return }
-        defer { finishOperation(ticket) }
         pendingDPIChanges.removeValue(forKey: deviceID)
         let token = UUID()
+        defer {
+            if dpiRequests[deviceID]?.token == token {
+                dpiRequests.removeValue(forKey: deviceID)
+                dpiBusyIDs.remove(deviceID)
+            }
+            if activeDPIPlans[deviceID]?.id == plan.id { activeDPIPlans.removeValue(forKey: deviceID) }
+            finishOperation(ticket)
+        }
         dpiRequests[deviceID] = (token, plan.interface)
         activeDPIPlans[deviceID] = plan
         dpiBusyIDs.insert(deviceID)
@@ -435,11 +458,10 @@ public final class DeviceManager: ObservableObject {
         chargingReadingInterfaces.removeValue(forKey: deviceID)
         hasConfirmedDeviceWrite = true
         record("用户确认 \(plan.deviceName) 第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档 DPI 变更；提交完整表并读回。")
-        let result = await dpiController.apply(plan)
-        guard isMonitoring, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
-        dpiRequests.removeValue(forKey: deviceID)
-        activeDPIPlans.removeValue(forKey: deviceID)
-        dpiBusyIDs.remove(deviceID)
+        let result = await withTaskCancellationHandler {
+            await dpiController.apply(plan)
+        } onCancel: { plan.invalidate() }
+        guard isMonitoring, !Task.isCancelled, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
         dpiWriteResults[deviceID] = result
         dpiResultInterfaces[deviceID] = plan.interface
         if result.outcome == .verified, let dpi = result.readback {
@@ -653,7 +675,7 @@ public final class DeviceManager: ObservableObject {
     }
 
     public func batterySummary(for device: DeviceInfo) -> MenuBatterySummary? {
-        guard !capabilityActivity(for: device.id).reading.contains("battery"), !isSuspended else { return nil }
+        guard adapterAssessment(for: device).capability("battery")?.session.state == .succeeded else { return nil }
         if let reading = batteryReadouts[device.id] {
             guard reading.isValid, let percent = reading.percent else { return nil }
             return .init(percent: percent, source: isSimulation ? "模拟服务 · 非硬件证据" : reading.source.title, acquiredAt: reading.acquiredAt)
