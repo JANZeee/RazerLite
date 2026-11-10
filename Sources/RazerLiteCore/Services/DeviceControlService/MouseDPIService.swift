@@ -18,6 +18,7 @@ public struct MouseDPIPlan: Identifiable, Sendable {
     let interface: HIDInterface
     let issuedAt: ContinuousClock.Instant
     let permit = DeviceWritePermit()
+    public var switchesStage: Bool { before.activeStage != after.activeStage }
     public var changedStages: [Int] {
         before.stages.indices.filter { before.stages[$0] != after.stages[$0] }.map { $0 + 1 }
     }
@@ -44,10 +45,15 @@ public struct MouseDPIWriteResult: Codable, Sendable {
 public protocol MouseDPIControlling: Sendable {
     func prepare(_ device: DeviceInfo, x: Int, y: Int) async throws -> MouseDPIPlan
     func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan
+    func prepareStageSwitch(_ device: DeviceInfo, baseline: MouseDPIState, stage: Int) async throws -> MouseDPIPlan
     func apply(_ plan: MouseDPIPlan) async -> MouseDPIWriteResult
 }
 
 public extension MouseDPIControlling {
+    func prepareStageSwitch(_ device: DeviceInfo, baseline: MouseDPIState, stage: Int) async throws -> MouseDPIPlan {
+        throw DeviceQueryError.malformed("当前控制服务尚未实现 DPI 切档")
+    }
+
     func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan {
         throw DeviceQueryError.malformed("当前控制服务尚未实现多档位编辑")
     }
@@ -72,6 +78,16 @@ public final class MouseDPIService: MouseDPIControlling, Sendable {
         return try await prepare(device) { fresh in
             guard fresh == baseline else {
                 throw MouseQueryError.malformed("设备档位已变化，请重新读取并载入设备值后编辑")
+            }
+            return after
+        }
+    }
+
+    public func prepareStageSwitch(_ device: DeviceInfo, baseline: MouseDPIState, stage: Int) async throws -> MouseDPIPlan {
+        let after = try ViperV4DPIProtocol.selectingStage(stage, in: baseline)
+        return try await prepare(device) { fresh in
+            guard fresh == baseline else {
+                throw MouseQueryError.malformed("设备档位已变化，请重新读取后选择")
             }
             return after
         }
@@ -119,7 +135,8 @@ public final class MouseDPIService: MouseDPIControlling, Sendable {
             readback = try ViperV4ReadProtocol.dpiState(client.query(.dpiStages))
             guard readback == plan.after else { throw MouseQueryError.malformed("读回的完整档位表与目标不一致") }
             return MouseDPIWriteResult(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: .verified,
-                                       attemptedWrite: true, readback: readback, message: "设备已读回目标 DPI，全部档位校验通过。")
+                                       attemptedWrite: true, readback: readback, message: plan.switchesStage ? "已读回第 \(plan.after.activeStage) 档，全部 DPI 数值校验通过。"
+                                           : "设备已读回目标 DPI，全部档位校验通过。")
         } catch {
             plan.invalidate()
             return MouseDPIWriteResult(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: attempted ? .uncertain : .notSent,

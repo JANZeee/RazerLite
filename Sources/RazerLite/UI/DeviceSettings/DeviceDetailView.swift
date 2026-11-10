@@ -205,6 +205,16 @@ struct DevicePageContent: View {
                     if let dpiManager, MouseReadService.canRead(device) {
                         DPIEditorView(device: device, manager: dpiManager, selectedProfile: profiles.selectedProfile(for: device),
                                       profileLoadRequest: state.profileLoadRequest)
+                        .task(id: "\(device.id)-\(dpiManager.isSuspended)") {
+                            guard await dpiManager.waitUntilAvailable(for: device.id) else { return }
+                            if dpiManager.mouseReadouts[device.id] == nil {
+                                await dpiManager.readMouseState(for: device.id)
+                            }
+                            if !Task.isCancelled, dpiManager.pollingReadouts[device.id] == nil,
+                               await dpiManager.waitUntilAvailable(for: device.id) {
+                                await dpiManager.readPollingRate(for: device.id)
+                            }
+                        }
                     }
                 }
             case .buttons: ButtonMappingPanel()

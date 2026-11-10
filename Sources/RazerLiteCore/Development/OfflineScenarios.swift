@@ -354,6 +354,16 @@ actor OfflineServices {
         return MouseDPIPlan(deviceID: device.id, deviceName: "模拟 · \(device.product)", before: before, after: after,
             interface: interface, issuedAt: outcome == .expired ? .now.advanced(by: .seconds(-61)) : .now)
     }
+    func prepareStageSwitch(_ device: DeviceInfo, baseline: MouseDPIState, stage: Int) throws -> MouseDPIPlan {
+        operations.append("prepare-switch:\(device.id)")
+        guard let interface = ViperV4Adapter.controlInterface(in: device) else { throw DeviceQueryError.unavailableInterface }
+        let before = dpiByDevice[device.id] ?? Self.baseline
+        guard before == baseline else { throw DeviceQueryError.malformed("模拟：设备档位已变化，请重新读取。") }
+        let after = try ViperV4DPIProtocol.selectingStage(stage, in: before)
+        return MouseDPIPlan(deviceID: device.id, deviceName: "模拟 · \(device.product)", before: before, after: after,
+            interface: interface, issuedAt: outcome == .expired ? .now.advanced(by: .seconds(-61)) : .now)
+    }
+
     func apply(_ plan: MouseDPIPlan) -> MouseDPIWriteResult {
         operations.append("apply:\(plan.deviceID)")
         guard plan.isUsable, outcome != .notSent, plan.permit.consume() else {
@@ -449,6 +459,9 @@ private struct OfflineDPIController: MouseDPIControlling {
     let services: OfflineServices
     func prepare(_ device: DeviceInfo, x: Int, y: Int) async throws -> MouseDPIPlan {
         try await services.prepare(device, x: x, y: y)
+    }
+    func prepareStageSwitch(_ device: DeviceInfo, baseline: MouseDPIState, stage: Int) async throws -> MouseDPIPlan {
+        try await services.prepareStageSwitch(device, baseline: baseline, stage: stage)
     }
     func prepareStages(_ device: DeviceInfo, baseline: MouseDPIState, changes: [MouseDPIStageChange]) async throws -> MouseDPIPlan {
         try await services.prepareStages(device, baseline: baseline, changes: changes)

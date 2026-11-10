@@ -47,6 +47,42 @@ struct MouseDPIServiceTests {
     }
     private func service(_ bus: DPIBus) -> MouseDPIService { MouseDPIService { _ in try bus.open() } }
 
+    @Test(arguments: [true, false])
+    func stageSwitchRequiresTargetActiveStageAndPreservesValues(matches: Bool) async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        var target = baseline
+        target[1] = 1
+        let bus = DPIBus([[response(baseline)], [response(baseline), acknowledgement(), response(matches ? target : baseline)]])
+        let controller = service(bus)
+        let plan = try await controller.prepareStageSwitch(device, baseline: before, stage: 1)
+        #expect(plan.switchesStage && plan.changedStages.isEmpty && plan.after.stages == before.stages)
+        #expect(bus.snapshot().0.map { $0[7] } == [0x86])
+        let result = await controller.apply(plan)
+        #expect(result.outcome == (matches ? .verified : .uncertain))
+        let frames = bus.snapshot().0
+        #expect(frames.map { $0[7] } == [0x86, 0x86, 6, 0x86])
+        var original = ViperV4DPIProtocol.request(before)
+        original[9] = 1
+        original[88] = ViperV4ReadProtocol.checksum(original)
+        #expect(frames[2] == original)
+    }
+
+    @Test func stageSwitchRejectsStaleTableAndInvalidTargets() async throws {
+        let before = try ViperV4DPIProtocol.writableBaseline(baseline)
+        let bus = DPIBus([[response(targetPayload())]])
+        let controller = service(bus)
+        for stage in [0, 3, before.activeStage] {
+            await #expect(throws: MouseQueryError.self) {
+                try await controller.prepareStageSwitch(device, baseline: before, stage: stage)
+            }
+        }
+        #expect(bus.snapshot().0.isEmpty)
+        await #expect(throws: MouseQueryError.self) {
+            try await controller.prepareStageSwitch(device, baseline: before, stage: 1)
+        }
+        #expect(bus.snapshot().0.map { $0[7] } == [0x86])
+    }
+
     @Test func multipleStageEditsUseOneWriteAndVerifyWholeTable() async throws {
         let before = try ViperV4DPIProtocol.writableBaseline(baseline)
         var target = baseline

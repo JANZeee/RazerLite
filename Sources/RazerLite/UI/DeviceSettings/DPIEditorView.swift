@@ -37,7 +37,7 @@ struct DPIEditorView: View {
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(RazerTheme(scheme: scheme).accent.opacity(0.055), in: RoundedRectangle(cornerRadius: 8))
                 }
-                Text("修改当前档位，或展开下方编辑全部档位。")
+                Text("点击上方档位可切换。展开下方可编辑多档 DPI。")
                     .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Toggle("联动 X/Y", isOn: Binding(get: { editor.draft.input.axesLinked }, set: { editor.draft.input.setLinked($0) }))
@@ -104,7 +104,8 @@ struct DPIEditorView: View {
     }
 
     private func synchronizeSelectedProfile() {
-        editor.draft.synchronize(profile: selectedProfile, request: profileLoadRequest, isBusy: busy)
+        let writing = manager.dpiBusyIDs.contains(device.id) || manager.pendingDPIChanges[device.id] != nil
+        editor.draft.synchronize(profile: selectedProfile, request: profileLoadRequest, isBusy: writing)
     }
 
     private func matchesProfile(_ profile: MouseDPIProfile) -> Bool {
@@ -123,13 +124,17 @@ struct DPIConfirmationView: View {
     let onConfirm: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 19) {
-            Label(isSimulation ? "模拟 DPI 变更" : "确认修改 DPI", systemImage: "slider.horizontal.3").font(.system(size: 23, weight: .semibold))
+            Label(isSimulation ? "模拟 DPI 变更" : plan.switchesStage ? "确认切换 DPI 档位" : "确认修改 DPI", systemImage: "slider.horizontal.3").font(.system(size: 23, weight: .semibold))
             if isSimulation {
                 Text("模拟数据 · 仅调用假服务，没有真实设备通信。")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.orange)
             }
             Text(plan.deviceName).font(.system(size: 12)).foregroundStyle(.secondary)
-            Text("修改第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档的 X/Y 数值，保持当前档位不变。底层命令会提交全部 \(plan.before.stages.count) 档；可能保存到设备，不能保证临时生效。")
+            Text(plan.switchesStage
+                 ? "第 \(plan.before.activeStage) 档 → 第 \(plan.after.activeStage) 档。保留每档的 X/Y 数值。"
+                 : "修改第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档的 X/Y 数值。")
+                .font(.system(size: 14, weight: .medium))
+            Text("将提交全部 \(plan.before.stages.count) 档，可能保存到设备。")
                 .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
             VStack(spacing: 12) {
                 HStack {

@@ -52,6 +52,13 @@ enum ViperV4DPIProtocol {
         return result
     }
 
+    static func selectingStage(_ stage: Int, in baseline: MouseDPIState) throws -> MouseDPIState {
+        guard (1...5).contains(stage), stage <= baseline.stages.count, stage != baseline.activeStage else {
+            throw MouseQueryError.malformed("请选择另一个已有 DPI 档位")
+        }
+        return MouseDPIState(activeStage: stage, stages: baseline.stages)
+    }
+
     static func request(_ state: MouseDPIState) -> [UInt8] {
         var frame = ViperV4ReadProtocol.request(.dpiStages)
         frame[5] = UInt8(3 + state.stages.count * 7)

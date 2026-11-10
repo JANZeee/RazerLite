@@ -436,6 +436,12 @@ public final class DeviceManager: ObservableObject {
         }
     }
 
+    public func prepareDPIStageSwitch(for deviceID: String, baseline: MouseDPIState, stage: Int) async {
+        await prepareDPIChange(for: deviceID) { [dpiController] device in
+            try await dpiController.prepareStageSwitch(device, baseline: baseline, stage: stage)
+        }
+    }
+
     private func prepareDPIChange(for deviceID: String, prepare: (DeviceInfo) async throws -> MouseDPIPlan) async {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !operations.isBusy(deviceID),
               dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil, pendingBrightnessChanges[deviceID] == nil,
@@ -524,11 +530,19 @@ public final class DeviceManager: ObservableObject {
         chargingReadouts.removeValue(forKey: deviceID)
         chargingReadingInterfaces.removeValue(forKey: deviceID)
         hasConfirmedDeviceWrite = true
-        record("用户确认 \(plan.deviceName) 第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档 DPI 变更；提交完整表并读回。")
+        let change = plan.switchesStage
+            ? "DPI 从第 \(plan.before.activeStage) 档切换至第 \(plan.after.activeStage) 档"
+            : "第 \(plan.changedStages.map(String.init).joined(separator: "、")) 档 DPI 数值变更"
+        record("用户确认 \(plan.deviceName) \(change)，提交完整表并读回。")
         let result = await withTaskCancellationHandler {
             await dpiController.apply(plan)
         } onCancel: { plan.invalidate() }
         guard isMonitoring, !Task.isCancelled, operations.isCurrent(ticket), dpiRequests[deviceID]?.token == token else { return }
+        guard result.deviceID == deviceID, result.interfaceID == plan.interface.id,
+              result.outcome != .verified || result.readback == plan.after else {
+            dpiErrors[deviceID] = "DPI 响应与目标不一致，请重新读取设备。"
+            return
+        }
         dpiWriteResults[deviceID] = result
         dpiResultInterfaces[deviceID] = plan.interface
         if result.outcome == .verified, let dpi = result.readback {

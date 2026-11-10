@@ -39,7 +39,7 @@ public struct DiagnosticSnapshot: Codable, Sendable {
                 queriesRequested: Bool = false, systemMetadataRequested: Bool = false,
                 automaticBatteryRequested: Bool = false, settingRequested: Bool = false, simulation: Bool = false) {
         schemaVersion = 11
-        applicationVersion = "0.13.0-keyboard-basics"
+        applicationVersion = "0.14.0-mouse-performance"
         generatedAt = Date()
         operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
         dataOrigin = simulation ? "synthetic-development-fixtures; not hardware evidence" : nil

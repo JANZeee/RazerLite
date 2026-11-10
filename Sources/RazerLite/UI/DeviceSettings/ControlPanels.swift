@@ -29,18 +29,30 @@ struct PerformancePanel: View {
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                         HStack(spacing: 10) {
                             ForEach(Array(dpi.stages.enumerated()), id: \.offset) { index, stage in
-                                VStack(alignment: .leading, spacing: 7) {
-                                    Text("\(index + 1) 档").font(.system(size: 10)).foregroundStyle(.secondary)
-                                    Text(stage.x == stage.y ? "\(stage.x)" : "\(stage.x) / \(stage.y)")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.7)
+                                Button {
+                                    guard let manager else { return }
+                                    Task { await manager.prepareDPIStageSwitch(for: device.id, baseline: dpi, stage: index + 1) }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 7) {
+                                        Text("\(index + 1) 档").font(.system(size: 10)).foregroundStyle(.secondary)
+                                        Text(stage.x == stage.y ? "\(stage.x)" : "\(stage.x) / \(stage.y)")
+                                            .font(.system(size: 13, weight: .medium, design: .rounded)).lineLimit(1).minimumScaleFactor(0.7)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                                    .background(RazerTheme(scheme: scheme).accent.opacity(dpi.activeStage == index + 1 ? 0.12 : 0.025), in: RoundedRectangle(cornerRadius: 9))
+                                    .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(RazerTheme(scheme: scheme).accent.opacity(dpi.activeStage == index + 1 ? 0.5 : 0.08)) }
+                                    .contentShape(Rectangle())
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                                .background(RazerTheme(scheme: scheme).accent.opacity(dpi.activeStage == index + 1 ? 0.12 : 0.025), in: RoundedRectangle(cornerRadius: 9))
-                                .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(RazerTheme(scheme: scheme).accent.opacity(dpi.activeStage == index + 1 ? 0.5 : 0.08)) }
+                                .buttonStyle(.plain)
+                                .disabled(dpi.activeStage == index + 1 || manager == nil || manager?.isSuspended == true
+                                          || manager?.isDeviceBusy(device.id) == true)
+                                .accessibilityLabel("第 \(index + 1) 档，X \(stage.x) / Y \(stage.y) DPI")
+                                .accessibilityAddTraits(dpi.activeStage == index + 1 ? .isSelected : [])
+                                .help(dpi.activeStage == index + 1 ? "当前档位" : "切换到此档位，确认后应用")
                             }
                         }
                     } else {
-                        Text("点击右上角“读取状态”查看 DPI。").font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text("等待设备返回 DPI 档位。").font(.system(size: 11)).foregroundStyle(.secondary)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
