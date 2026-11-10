@@ -7,7 +7,7 @@ struct RazerLiteProbe {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("--help") {
-            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-battery 独立读取 Viper V4 Pro 电量，不查询 DPI、充电或修改设置。\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取 Viper V4 Pro 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 试读 1532:02D2 键盘电量，macOS 真机兼容性待验证。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
+            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-battery 独立读取 Viper V4 Pro 电量，不查询 DPI、充电或修改设置。\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取 Viper V4 Pro 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 试读 1532:02D2 键盘电量，macOS 真机兼容性待验证。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--read-keyboard-brightness 试读 Reclusa Mini 65% 1532:02F5 USB 的灯区与配置槽 1 亮度；不改变灯光或配置槽。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
             return
         }
         var duration = 0.0
@@ -19,6 +19,7 @@ struct RazerLiteProbe {
         var readCharging = false
         var readKeyboardBattery = false
         var readKeyboardCharging = false
+        var readKeyboardBrightness = false
         var selectedID: String?
         var index = 0
         while index < args.count {
@@ -31,6 +32,7 @@ struct RazerLiteProbe {
             case "--read-charging": readCharging = true
             case "--read-keyboard-battery": readKeyboardBattery = true
             case "--read-keyboard-charging": readKeyboardCharging = true
+            case "--read-keyboard-brightness": readKeyboardBrightness = true
             case "--device-id":
                 index += 1
                 guard index < args.count else { fail("--device-id 需要枚举结果中的设备 ID。") }
@@ -44,7 +46,7 @@ struct RazerLiteProbe {
             }
             index += 1
         }
-        let readCount = [readMouse, readBattery, readSystemBattery, readPolling, readCharging, readKeyboardBattery, readKeyboardCharging].filter { $0 }.count
+        let readCount = [readMouse, readBattery, readSystemBattery, readPolling, readCharging, readKeyboardBattery, readKeyboardCharging, readKeyboardBrightness].filter { $0 }.count
         if readCount > 1 { fail("请一次选择一个读取后端。") }
         if readCount > 0 && duration > 0 { fail("读取选项与 --watch 不能组合；读取为单次显式操作。") }
         if selectedID != nil && readCount == 0 { fail("--device-id 仅用于读取选项。") }
@@ -67,7 +69,31 @@ struct RazerLiteProbe {
         var chargingReadouts: [String: MouseChargingReading] = [:]
         var keyboardBatteries: [String: KeyboardPowerReading] = [:]
         var keyboardCharging: [String: KeyboardPowerReading] = [:]
+        var keyboardBrightness: [String: KeyboardBrightnessReading] = [:]
         var queryFailed = false
+        if readKeyboardBrightness {
+            let candidates = DeviceInfo.group(records).filter {
+                ReclusaBrightnessReadService.canRead($0) && (selectedID == nil || $0.id == selectedID)
+            }
+            guard candidates.count == 1, let device = candidates.first else {
+                fail("未找到唯一可试读亮度的 Reclusa Mini 65% 1532:02F5 USB；多台设备请用 --device-id 指定。")
+            }
+            stderr("手动试读灯区与配置槽 1 的亮度；不切换配置槽、模式或修改灯光。")
+            var reading: KeyboardBrightnessReading?
+            Task { @MainActor in
+                reading = await ReclusaBrightnessReadService().read(device)
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+            CFRunLoopRun()
+            guard let reading else { fail("键盘亮度未返回结果。") }
+            discovery.refresh()
+            guard let current = DeviceInfo.group(records).first(where: { $0.id == device.id }), current == device else {
+                fail("读取期间设备已变化，未导出旧状态。")
+            }
+            keyboardBrightness[device.id] = reading
+            queryFailed = reading.issue != nil || reading.rawBrightness == nil
+            if let issue = reading.issue { stderr("\(issue.kind?.title ?? "读取失败")：\(issue.message)") }
+        }
         let keyboardField: KeyboardPowerField? = readKeyboardBattery ? .battery : readKeyboardCharging ? .charging : nil
         if let field = keyboardField {
             let candidates = DeviceInfo.group(records).filter {
@@ -205,7 +231,8 @@ struct RazerLiteProbe {
                                                                   pollingReadouts: pollingReadouts,
                                                                   chargingReadouts: chargingReadouts,
                                                                   keyboardBatteryReadouts: keyboardBatteries,
-                                                                  keyboardChargingReadouts: keyboardCharging).jsonData())
+                                                                  keyboardChargingReadouts: keyboardCharging,
+                                                                  keyboardBrightnessReadouts: keyboardBrightness).jsonData())
             FileHandle.standardOutput.write(Data("\n".utf8))
         } catch { fail("诊断编码失败：\(error.localizedDescription)") }
         if queryFailed { discovery.stop(); exit(1) }

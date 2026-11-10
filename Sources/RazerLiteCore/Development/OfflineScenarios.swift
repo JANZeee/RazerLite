@@ -4,7 +4,7 @@ import Foundation
 
 /// Development fixtures only. Every dependency is explicitly replaced; no live fallback.
 public enum OfflineScenario: String, CaseIterable, Identifiable, Sendable {
-    case empty, mouse, keyboard, observedKeyboard, bluetooth, unknown, twinMice, unread, reading
+    case empty, mouse, keyboard, observedKeyboard, keyboardLighting, bluetooth, unknown, twinMice, unread, reading
     case partial, timeout, permissionDenied, receiverOnly, retryFailed
     public var id: String { rawValue }
     public var title: String {
@@ -12,7 +12,8 @@ public enum OfflineScenario: String, CaseIterable, Identifiable, Sendable {
         case .empty: "无设备"
         case .mouse: "鼠标 · 完整读数"
         case .keyboard: "键盘 · 0% 电量"
-        case .observedKeyboard: "Reclusa · 仅识别"
+        case .observedKeyboard: "Reclusa · 尚未读取"
+        case .keyboardLighting: "Reclusa · 灯光亮度"
         case .bluetooth: "蓝牙 · 系统缓存"
         case .unknown: "未知型号 · 长名称"
         case .twinMice: "两台同型号鼠标"
@@ -78,6 +79,8 @@ public final class OfflineScenarioSession: ObservableObject {
             systemBatteryReader: OfflineSystemReader(services: services),
             pollingReader: OfflinePollingReader(services: services),
             pollingController: OfflinePollingController(services: services),
+            brightnessReader: OfflineBrightnessReader(services: services),
+            brightnessController: OfflineBrightnessController(services: services),
             chargingReader: OfflineChargingReader(services: services),
             keyboardPowerReader: OfflineKeyboardReader(services: services), batteryReader: OfflineBatteryReader(services: services), isSimulation: true)
         profiles = ProfileService(storageURL: directory.appendingPathComponent("profiles.json"))
@@ -120,6 +123,8 @@ public final class OfflineScenarioSession: ObservableObject {
                 await manager.readKeyboardPower(for: device.id, field: .battery)
                 guard token == generation else { return }
                 await manager.readKeyboardPower(for: device.id, field: .charging)
+            } else if ReclusaBrightnessReadService.canRead(device) {
+                await manager.readKeyboardBrightness(for: device.id)
             } else if SystemBatteryService.canRead(device) {
                 await manager.readSystemBattery(for: device.id)
             }
@@ -169,7 +174,7 @@ public final class OfflineScenarioSession: ObservableObject {
         case .keyboard:
             return [interface(10, pid: 0x02D2, name: "Razer BlackWidow V4 Low-profile TKL HyperSpeed",
                               number: 2, page: 1, usage: 2, input: 8, feature: 90)]
-        case .observedKeyboard:
+        case .observedKeyboard, .keyboardLighting:
             return [
                 interface(10, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 0, page: 1, usage: 2, input: 8, feature: 0),
                 interface(11, pid: 0x02F5, name: "Razer Reclusa Mini 65%", number: 1, page: 1, usage: 6, input: 48, feature: 1),
@@ -209,6 +214,7 @@ struct OfflineReadContext: Sendable {
 actor OfflineServices {
     private var scenario: OfflineScenario = .empty
     private var outcome: OfflineDPIOutcome = .verified
+    private var brightnessByDevice: [String: UInt8] = [:]
     private var pollingByDevice: [String: Int] = [:]
     private var dpiByDevice: [String: MouseDPIState] = [:]
     private var pending: [CheckedContinuation<Void, Never>] = []
@@ -223,6 +229,7 @@ actor OfflineServices {
         scenario = value
         dpiByDevice.removeAll()
         pollingByDevice.removeAll()
+        brightnessByDevice.removeAll()
     }
     func releaseReads() {
         let waiting = pending
@@ -246,6 +253,40 @@ actor OfflineServices {
             }
         }
         return context
+    }
+    func readBrightness(_ device: DeviceInfo) async -> KeyboardBrightnessReading {
+        _ = await read(device, operation: "brightness")
+        let raw = brightnessByDevice[device.id] ?? 153
+        return .init(deviceID: device.id, interfaceID: ReclusaLightingAdapter.controlInterface(in: device)?.id,
+            profileID: 1, regionID: 5, rawBrightness: raw, percent: ReclusaBrightnessProtocol.percent(raw), issue: nil, readAt: .now)
+    }
+    func prepareBrightness(_ device: DeviceInfo, percent: Int) async throws -> KeyboardBrightnessPlan {
+        let raw = try ReclusaBrightnessProtocol.raw(forPercent: percent)
+        guard let interface = ReclusaLightingAdapter.controlInterface(in: device) else { throw DeviceQueryError.unavailableInterface }
+        let before = await readBrightness(device)
+        guard before.rawBrightness != raw else { throw DeviceQueryError.malformed("模拟：目标亮度未变化。") }
+        return .init(deviceID: device.id, deviceName: "模拟 · \(device.product)", before: before,
+            afterPercent: percent, afterRaw: raw, interface: interface,
+            issuedAt: outcome == .expired ? .now.advanced(by: .seconds(-61)) : .now)
+    }
+    func applyBrightness(_ plan: KeyboardBrightnessPlan) -> KeyboardBrightnessWriteResult {
+        operations.append("apply-brightness:\(plan.deviceID)")
+        guard plan.isUsable, outcome != .notSent,
+              (brightnessByDevice[plan.deviceID] ?? 153) == plan.before.rawBrightness, plan.permit.consume() else {
+            plan.invalidate()
+            return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: .now,
+                outcome: .notSent, attemptedWrite: false, readback: nil, message: "模拟：未提交亮度设置。没有设备通信。")
+        }
+        if outcome == .mismatch {
+            return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: .now,
+                outcome: .uncertain, attemptedWrite: true, readback: plan.before, message: "模拟：亮度读回不一致，不自动重试。没有设备通信。")
+        }
+        brightnessByDevice[plan.deviceID] = plan.afterRaw
+        let reading = KeyboardBrightnessReading(deviceID: plan.deviceID, interfaceID: plan.interface.id,
+            profileID: 1, regionID: 5, rawBrightness: plan.afterRaw,
+            percent: ReclusaBrightnessProtocol.percent(plan.afterRaw), issue: nil, readAt: .now)
+        return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: .now,
+            outcome: .verified, attemptedWrite: true, readback: reading, message: "模拟：profile 1 亮度读回一致。没有设备通信。")
     }
     func preparePolling(_ device: DeviceInfo, hertz: Int) async throws -> PollingRatePlan {
         _ = try ViperV4PollingWriteProtocol.code(for: hertz)
@@ -307,6 +348,17 @@ actor OfflineServices {
     }
 }
 
+private struct OfflineBrightnessReader: KeyboardBrightnessReadingService {
+    let services: OfflineServices
+    func read(_ device: DeviceInfo) async -> KeyboardBrightnessReading { await services.readBrightness(device) }
+}
+private struct OfflineBrightnessController: KeyboardBrightnessControlling {
+    let services: OfflineServices
+    func prepare(_ device: DeviceInfo, percent: Int) async throws -> KeyboardBrightnessPlan {
+        try await services.prepareBrightness(device, percent: percent)
+    }
+    func apply(_ plan: KeyboardBrightnessPlan) async -> KeyboardBrightnessWriteResult { await services.applyBrightness(plan) }
+}
 private struct OfflineBatteryReader: BatteryReadingService {
     let services: OfflineServices
     func read(_ device: DeviceInfo) async -> BatteryReading {

@@ -55,6 +55,8 @@ public struct CapabilityActivity: Sendable {
     public var isSuspended: Bool
     public var pollingWriteBusy: Bool
     public var pollingAwaitingConfirmation: Bool
+    public var brightnessWriteBusy: Bool
+    public var brightnessAwaitingConfirmation: Bool
     public var dpiBusy: Bool
     public var dpiAwaitingConfirmation: Bool
     public var isDraining: Bool
@@ -62,9 +64,11 @@ public struct CapabilityActivity: Sendable {
     public var previousReadings: [String: CapabilitySample]
     public init(reading: Set<String> = [], isSuspended: Bool = false, dpiBusy: Bool = false, dpiAwaitingConfirmation: Bool = false,
                 pollingWriteBusy: Bool = false, pollingAwaitingConfirmation: Bool = false,
+                brightnessWriteBusy: Bool = false, brightnessAwaitingConfirmation: Bool = false,
                 isDraining: Bool = false, cancelled: Set<String> = [], previousReadings: [String: CapabilitySample] = [:]) {
         self.reading = reading; self.isSuspended = isSuspended
         self.pollingWriteBusy = pollingWriteBusy; self.pollingAwaitingConfirmation = pollingAwaitingConfirmation
+        self.brightnessWriteBusy = brightnessWriteBusy; self.brightnessAwaitingConfirmation = brightnessAwaitingConfirmation
         self.dpiBusy = dpiBusy; self.dpiAwaitingConfirmation = dpiAwaitingConfirmation
         self.isDraining = isDraining; self.cancelled = cancelled; self.previousReadings = previousReadings
     }
@@ -92,7 +96,7 @@ public struct AdapterAssessment: Codable, Equatable, Sendable {
 
     public func capability(_ id: String) -> DeviceCapability? { capabilities.first { $0.id == id } }
     public var readingSummary: String {
-        let values = capabilities.filter { $0.implementation == .implemented && $0.id != "discovery" && $0.id != "localProfiles" && $0.id != "dpiWrite" && $0.id != "pollingWrite" }
+        let values = capabilities.filter { $0.implementation == .implemented && $0.id != "discovery" && $0.id != "localProfiles" && $0.id != "dpiWrite" && $0.id != "pollingWrite" && $0.id != "brightnessWrite" }
         if values.contains(where: { $0.session.state == .suspended }) { return "读取已暂停" }
         if values.contains(where: { $0.session.state == .waiting }) { return "等待上次操作结束" }
         if values.contains(where: { $0.session.state == .reading }) { return "正在读取" }
@@ -125,7 +129,7 @@ public enum AdapterCatalog {
     public static let featureTitles = [
         ("discovery", "设备信息与接口枚举"), ("firmware", "固件查询"),
         ("dpi", "DPI 读取"), ("dpiWrite", "DPI 档位设置"), ("stages", "DPI 档位读取"),
-        ("polling", "回报率配置读取"), ("pollingWrite", "回报率设置"), ("rgb", "RGB 亮度 / 灯效"),
+        ("polling", "回报率配置读取"), ("pollingWrite", "回报率设置"), ("brightness", "键盘亮度读取"), ("brightnessWrite", "键盘亮度设置"), ("rgb", "RGB 颜色 / 灯效"),
         ("battery", "电池电量"), ("charging", "充电状态"),
         ("hardwareMapping", "硬件按键映射 / Fn"), ("systemMapping", "系统重映射 / 宏"),
         ("localProfiles", "本地 DPI 档案"), ("onboardProfiles", "板载配置 / 自动恢复")
@@ -134,11 +138,19 @@ public enum AdapterCatalog {
     public static func assess(_ device: DeviceInfo, battery: BatteryReading? = nil, telemetry: MouseTelemetry? = nil,
                               systemBattery: SystemBatteryReading? = nil, polling: MousePollingReading? = nil,
                               charging: MouseChargingReading? = nil, keyboardBattery: KeyboardPowerReading? = nil,
-                              keyboardCharging: KeyboardPowerReading? = nil, activity: CapabilityActivity = .init(),
-                              dpiWrite: MouseDPIWriteResult? = nil, pollingWrite: PollingRateWriteResult? = nil, simulation: Bool = false) -> AdapterAssessment {
+                              keyboardCharging: KeyboardPowerReading? = nil, keyboardBrightness: KeyboardBrightnessReading? = nil, activity: CapabilityActivity = .init(),
+                              dpiWrite: MouseDPIWriteResult? = nil, pollingWrite: PollingRateWriteResult? = nil, brightnessWrite: KeyboardBrightnessWriteResult? = nil, simulation: Bool = false) -> AdapterAssessment {
         let manifest = AdapterManifestCatalog.manifest(for: device)
         let backends = DeviceReadRegistry.backends(for: device)
-        let matched = manifest.map { backends.map(\.rawValue).contains($0.id) } ?? false
+        let lightingInterface = ReclusaLightingAdapter.controlInterface(in: device)
+        let matched = manifest.map { $0.id == AdapterManifestCatalog.reclusaLighting.id
+            ? lightingInterface != nil : backends.map(\.rawValue).contains($0.id) } ?? false
+        let keyboardBrightness = keyboardBrightness.flatMap {
+            $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == lightingInterface?.id ? $0 : nil
+        }
+        let brightnessWrite = brightnessWrite.flatMap {
+            $0.deviceID == device.id && $0.interfaceID == lightingInterface?.id ? $0 : nil
+        }
         let battery = battery.flatMap { $0.matches(device) ? $0 : nil }
         let mouseInterface = MouseReadService.interfaceID(for: device)
         let mouse = telemetry.flatMap { $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == mouseInterface ? $0 : nil }
@@ -191,6 +203,13 @@ public enum AdapterCatalog {
                     session = .init(rateWrite.outcome == .verified ? .succeeded : rateWrite.outcome == .uncertain ? .unconfirmed : .notRequested,
                         at: rateWrite.completedAt, source: simulation ? "模拟控制服务" : "设备控制结果", detail: rateWrite.message)
                 } else { session = .init(.notRequested, detail: "明确确认后一次提交并读回配置；不代表实测频率。") }
+            } else if id == "brightnessWrite" {
+                if activity.brightnessWriteBusy { session = .init(.working, detail: "亮度检查或应用进行中；以最终读回为准。") }
+                else if activity.brightnessAwaitingConfirmation { session = .init(.awaitingConfirmation, detail: "等待明确确认，尚未写入。") }
+                else if let brightnessWrite {
+                    session = .init(brightnessWrite.outcome == .verified ? .succeeded : brightnessWrite.outcome == .uncertain ? .unconfirmed : .notRequested,
+                        at: brightnessWrite.completedAt, source: simulation ? "模拟控制服务" : "设备控制结果", detail: brightnessWrite.message)
+                } else { session = .init(.notRequested, detail: "检查后明确确认；单次设置并读回 profile 1 配置。") }
             } else if activity.reading.contains(id) {
                 session = .init(.reading, detail: "等待本次查询完成。")
             } else if activity.cancelled.contains(id) {
@@ -226,6 +245,12 @@ public enum AdapterCatalog {
                             session = result(valid: valid, at: mouse.readAt, source: source, issue: issue?.message, kind: issue?.kind)
                         }
                     } else { session = unread() }
+                case "brightness":
+                    if let keyboardBrightness {
+                        session = result(valid: keyboardBrightness.hasValue, at: keyboardBrightness.readAt, source: source,
+                            issue: keyboardBrightness.issue?.message, kind: keyboardBrightness.issue?.kind,
+                            success: "profile 1 亮度配置已取得，不是当前可见灯光测量。")
+                    } else { session = unread() }
                 case "polling":
                     if let polling {
                         session = result(valid: polling.configuredHertz != nil, at: polling.readAt, source: source,
@@ -242,6 +267,7 @@ public enum AdapterCatalog {
             switch id {
             case "battery": value = (battery?.percent ?? system?.percent ?? keyboardBattery?.batteryPercent ?? mouse?.batteryPercent).map { "\($0)%" }
             case "charging": value = (keyboardCharging?.chargingState ?? charging?.state)?.title
+            case "brightness": value = keyboardBrightness?.percent.map { "\($0)%" }
             case "polling": value = polling?.configuredHertz.map { "\($0) Hz" }
             case "dpi": value = mouse?.dpi.map { "X \($0.current.x) / Y \($0.current.y) DPI" }
             case "stages": value = mouse?.dpi.map { "\($0.stages.count) 档 · 当前第 \($0.activeStage) 档" }

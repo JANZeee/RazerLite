@@ -13,8 +13,11 @@ def run(*arguments):
 
 
 help_result = run("--help")
-assert help_result.returncode == 0 and "--read-battery" in help_result.stdout, "Rebuild the probe first"
+assert help_result.returncode == 0 and "--read-battery" in help_result.stdout and "--read-keyboard-brightness" in help_result.stdout, "Rebuild the probe first"
 cases = [
+    (["--read-keyboard-brightness", "--read-mouse"], "一次选择一个读取后端", False),
+    (["--read-keyboard-brightness", "--watch", "1"], "读取选项与 --watch 不能组合", False),
+    (["--read-keyboard-brightness", "--device-id", "razerlite-test-nonexistent-device"], "未找到唯一", True),
     (["--read-battery", "--read-mouse"], "一次选择一个读取后端", False),
     (["--read-battery", "--read-charging"], "一次选择一个读取后端", False),
     (["--read-battery", "--watch", "1"], "读取选项与 --watch 不能组合", False),
@@ -32,5 +35,5 @@ result = run()
 assert result.returncode == 0, result.stderr
 snapshot = json.loads(result.stdout)
 assert snapshot["mode"] == "discovery-only; no feature queries requested"
-assert not snapshot.get("batteryReadouts") and not snapshot.get("mouseReadouts")
+assert not snapshot.get("batteryReadouts") and not snapshot.get("mouseReadouts") and not snapshot.get("keyboardBrightnessReadouts")
 print("PASS help and default passive discovery")

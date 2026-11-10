@@ -1,27 +1,30 @@
 # RazerLite（未完成）
 
-原生 SwiftUI 菜单栏应用，本地管理 macOS 上的雷蛇外设。当前为 **0.11.6：日常可靠性与安装验收**。无需账号、云服务或第三方运行时。
+原生 SwiftUI 菜单栏应用，本地管理 macOS 上的雷蛇外设。当前为 **0.12.0：键盘亮度控制**。无需账号、云服务或第三方运行时。
 
 | 范围 | 当前能力与验证边界 |
 | --- | --- |
-| 日常界面 | 设备只展示已实现的操作入口；键盘灯光预览、未开放按键页已收起。菜单栏保留状态、电量读取和设备入口；接口与日志折叠，无设备时收起无效电量设置。 |
+| 日常界面 | 设备只展示已实现的操作入口；已适配键盘显示真实亮度设置，未开放按键页已收起。菜单栏保留状态、电量读取和设备入口；接口与日志折叠，无设备时收起无效电量设置。 |
 | 电量体验 | 独立手动电量读取不附带 DPI 查询；默认关闭自动刷新和提醒。调度含休眠暂停、退避及快照预算，目前仅离线应用开放，真实后端待真机和性能验收。提醒只处理新设备读数，不使用系统缓存；系统通知授权与投递待实测。 |
 | 读取可靠性 | 断连、睡眠和取消使旧结果失效；底层返回前保留设备占用。独立电量查询清除旧电量来源，接口变化或响应身份不匹配明确失败，保留 DPI、充电状态及带时间的历史值。 |
-| 适配与诊断 | 每项分别展示代码实现、历史验证和本次结果；接口匹配条件与适配清单共用。目录保留 273 条上游参考，并补充两款内置 USB 适配和一条 Reclusa 本机 USB 识别记录，分别标注来源。工具栏和空设备页可打开“检查连接”，页面本身不查询设备。 |
+| 适配与诊断 | 每项分别展示代码实现、历史验证和本次结果；接口匹配条件与适配清单共用。目录保留 273 条上游参考，并补充三款内置 USB 适配，Reclusa 身份记录仍单独标注本机来源，分别标注来源。工具栏和空设备页可打开“检查连接”，页面本身不查询设备。 |
 | 设备发现 | 枚举系统可见的 Razer HID、聚合接口、监听热插拔；USB VID `1532`，蓝牙侧 `068E` 仅接受 Bluetooth/BLE transport。未知 PID 正常展示；273 条型号目录仅供参考，不代表私有功能已支持。 |
 | Viper V4 Pro `1532:00E6` USB | 电量、X/Y DPI、全部 DPI 档位与配置回报率曾在本机读回；一次明确授权的第 3 档 2800/2800 写入已验证。充电查询已在本机返回“未充电”；充电中与状态切换待验收。不同固件与连接方式不自动继承兼容性。 |
 | BlackWidow V4 Low-profile TKL `1532:02D2` USB | 电量和充电为独立试验适配，模拟协议测试通过，真实 macOS 查询待验证。 |
+| Reclusa Mini 65% `1532:02F5` USB 接收器 | 官方模块映射与亮度协议已核对，本机读取灯区 5、配置通道 1、原始亮度 255（100%）。新增手动亮度调整与关闭目标；设置需要检查、确认及读回，真实写入及实际灯光变化待验证。其他 PID/连接方式不继承支持。 |
 | 蓝牙系统电量 | 优先同节点 HID 属性，缺失时按地址、VID/PID 精确关联一次有时限的系统快照；`BSK MOBILE 068E:00D5` 曾读到 100%。显示系统缓存及应用取得时间，不保存地址或原始快照。 |
 | DPI 档位编辑 | Viper `00E6` USB 可编辑任意已有档位的 X/Y，支持逐档联动、载入当前值和输入提示；确认后一次提交并验证完整表。保留当前档位、档位数量和未编辑原值；0.11.0 通过模拟协议与界面测试，多档修改尚待真机验收。 |
 | 回报率设置 | Viper `00E6` USB 的 125 / 500 / 1000 / 2000 / 4000 / 8000 Hz 配置选项；先检查、再确认，单次提交后验证配置读回。公开实现与抓包已审查，模拟测试通过，真实设置与跨重启行为待验证；不代表实际输入频率。 |
 | 本地档案 | 无外设也能从菜单栏打开预设库，创建、联动编辑、复制、搜索、导入/导出 DPI 预设。当前目标仅 Viper `00E6` USB；重复载入同一预设会重新填入编辑器，应用仍需逐次检查与明确确认。JSON schema 1，文件上限 1 MiB。 |
 | 设置与菜单栏 | 跟随系统/浅色/深色，关闭主窗口后保留菜单栏或退出，恢复顶层页面和原生窗口位置/尺寸。默认保留菜单栏。设置不保存设备会话、读数、写入许可，也不自动恢复设备参数。 |
 | 安装与登录启动 | 固定安装脚本校验签名/版本类型，更新失败尝试恢复旧包，并发和运行中覆盖被拒绝。首次安装及启动已本机验证。macOS 13+ `SMAppService` 只在用户操作时注册；登录重启及 Developer ID 分发仍待验收。 |
-| 尚未实现 | 设备 RGB、固件查询、按键映射、宏、板载档案和自动应用。灯光预览不再作为日常设备入口。 |
+| 尚未实现 | RGB 颜色与动态灯效、固件查询、按键映射、宏、板载档案和自动应用。 |
 
 默认启动、刷新和热插拔只读系统属性；菜单展开不查询设备。手动查询只打开白名单中的非输入接口，使用已审查的请求。参数修改另走检查、明确确认、单次许可和完整读回；不独占外设、不捕获输入、默认不自动轮询；生产后端自动电量尚未开放。
 
-本轮修复接口变化后的电量旧值回流、过期通知等待及通知互相干扰，并补安装更新失败恢复。222 项核心测试、13 项安装测试通过，Debug/Release 和 CLI 检查通过，见 [0.11.6 记录](docs/PHASE0116_DAILY_RELIABILITY.md)。本轮没有设置写入、拔插或真实睡眠操作；自动电量仍未对生产后端开放。
+本轮实现 Reclusa 的真实亮度读取、目标编辑、关闭灯光快捷和单次确认写入流程；247 项核心测试通过。协议来源、范围和运行方法见 [键盘亮度记录](docs/PHASE012_KEYBOARD_BRIGHTNESS.md)。
+
+0.11.6 修复接口变化后的电量旧值回流、过期通知等待及通知互相干扰，并补安装更新失败恢复。222 项核心测试、13 项安装测试通过，Debug/Release 和 CLI 检查通过，见 [0.11.6 记录](docs/PHASE0116_DAILY_RELIABILITY.md)。本轮没有设置写入、拔插或真实睡眠操作；自动电量仍未对生产后端开放。
 
 菜单栏反馈和本地预设改进见 [0.11.5 记录](docs/PHASE0115_MENU_PROFILES.md)；DPI 联动与取消可靠性修复见 [0.11.4 记录](docs/PHASE0114_DPI_EDITING.md)。
 
@@ -29,7 +32,7 @@
 
 0.11.2 修正 Reclusa Mini 65% `1532:02F5 USB` 的键盘类型展示，并标注本机识别来源；不新增私有查询或控制能力。200 项测试通过，详见 [0.11.2 记录](docs/PHASE0112_RECLUSA_IDENTITY.md)。上一轮 Viper 回报率配置读回为 1000 Hz；设置仍待真机验收。回报率设置、运行与验证说明见 [0.11.1 记录](docs/PHASE0111_POLLING_CONTROL.md)。多档编辑、协议参考和后续基本功能优先级见 [0.11.0 记录](docs/PHASE011_DPI_STAGES.md)。界面与资源验收见 [0.10.3 记录](docs/PHASE0103_LIGHTWEIGHT.md)，电量流程见 [0.10.2 记录](docs/PHASE0102_BATTERY.md)，读取生命周期见 [0.10.1 记录](docs/PHASE0101_READ_LIFECYCLE.md)，适配清单与连接诊断见 [0.10.0 记录](docs/PHASE010_CAPABILITIES.md)。0.10.3 含无设备场景的 CPU、physical footprint 与唤醒计数短测，不代表长期运行或硬件负载表现。历史协议和功能说明见 [功能演进](docs/FEATURE_HISTORY.md)、[验证记录](docs/VALIDATION.md)。下一阶段见 [更新开发计划](docs/NEXT_DEVELOPMENT_PLAN.md)，包含雷云及开源项目对照、优先级和验收条件。
 
-没有外设时可运行 `./scripts/build-scenarios.sh`，打开 `build/RazerLite-Scenarios.app`。14 个场景替换所有设备服务（含刷新失败历史值与 Reclusa 仅识别场景），档案保存在临时目录；界面设置使用独立的 `local.RazerLite.Scenarios.Preferences` 域，不影响正式版。所有模拟界面与诊断均标注来源，Release 不含场景实现。说明见 [离线场景](docs/PHASE09_OFFLINE_SCENARIOS.md)。
+没有外设时可运行 `./scripts/build-scenarios.sh`，打开 `build/RazerLite-Scenarios.app`。15 个场景替换所有设备服务（含刷新失败历史值与 Reclusa 尚未读取及灯光场景），档案保存在临时目录；界面设置使用独立的 `local.RazerLite.Scenarios.Preferences` 域，不影响正式版。所有模拟界面与诊断均标注来源，Release 不含场景实现。说明见 [离线场景](docs/PHASE09_OFFLINE_SCENARIOS.md)。
 
 ## 环境与运行
 
@@ -41,7 +44,7 @@
 open build/RazerLite.app
 ```
 
-默认关闭主窗口后菜单栏继续监听插拔；菜单栏可重开窗口、刷新或退出。可在设置中改变关闭行为与外观。关闭主窗口会使待确认的 DPI 和回报率计划失效。
+默认关闭主窗口后菜单栏继续监听插拔；菜单栏可重开窗口、刷新或退出。可在设置中改变关闭行为与外观。关闭主窗口会使待确认的 DPI、回报率和亮度计划失效。
 
 脚本默认构建 Release；开发时可运行 `./scripts/build-app.sh debug`。使用现有 Apple SDK，不下载依赖。编译缓存存于 `$TMPDIR/RazerLite-build-<工作目录校验值>`，避免 Documents 文件提供程序给测试 bundle 附加 FinderInfo 而影响签名；可用 `RAZERLITE_BUILD_PATH` 指向其他**本地、非同步**缓存目录。产物仍在本项目 `build/`。
 
@@ -87,6 +90,9 @@ open build/RazerLite.app
 ./build/razerlite-probe --read-keyboard-battery > build/keyboard-battery.json
 ./build/razerlite-probe --read-keyboard-charging > build/keyboard-charging.json
 
+# 02F5 USB 接收器：只读灯区与配置通道 1 亮度，不改变灯光。
+./build/razerlite-probe --read-keyboard-brightness > build/keyboard-brightness.json
+
 # 多台匹配鼠标时，使用本次枚举的 ID 指定其中一台（ID 随重连变化）。
 # ./build/razerlite-probe --read-mouse --device-id usb-<ID>
 
@@ -96,7 +102,7 @@ log show --last 10m --info --predicate 'subsystem == "local.RazerLite"'
 
 窗口工具栏“导出诊断”现使用应用内导出页：显示完整文件夹路径与文件名，默认 Downloads，可手动输入已有绝对目录或选择文件夹，点击“保存 JSON”后显示实际结果。采用排他创建，同名文件会明确拒绝，不会覆盖。Release 窗口已实际在 `/private/tmp` 保存并解析成功，也已验证重复保存不改变原文件。此前系统 NSSavePanel 的根因没有确认，当前流程已替代该失效入口；目录选择器和其他目标位置的系统权限仍需按环境验证。
 
-当前 JSON schema 9 保留系统、设备接口及各项读数，adapterManifests、adapterAssessments 与 connectionCheck 分别记录内置适配依据、逐设备实现/证据/会话状态和排查建议。能力会话新增可选 value / previous，并区分等待旧操作结束、读取取消；新增独立 batteryReadouts，旧导出缺少此可选字段仍可解码。模拟模式有顶层 dataOrigin 标识；每个 assessment 也独立标识模拟来源，模拟成功不提升真机证据等级。失败分类区分超时、权限、无系统属性、设备拒绝、协议不匹配等。系统电量不导出蓝牙地址；configuredHertz 表明回报率是配置值。读取失败返回非零 CLI 退出码；设备在读取期间未变化时，仍输出错误和有效的部分值。默认不收集序列号或输入内容。USB 的 VersionNumber / bcdDevice 不当作真实固件版本。
+当前 JSON schema 11 保留系统、设备接口及各项读数，adapterManifests、adapterAssessments 与 connectionCheck 分别记录内置适配依据、逐设备实现/证据/会话状态和排查建议。能力会话新增可选 value / previous，并区分等待旧操作结束、读取取消；新增独立 batteryReadouts、keyboardBrightnessReadouts 和 brightnessWriteResults，旧导出缺少这些可选字段仍可解码。模拟模式有顶层 dataOrigin 标识；每个 assessment 也独立标识模拟来源，模拟成功不提升真机证据等级。失败分类区分超时、权限、无系统属性、设备拒绝、协议不匹配等。系统电量不导出蓝牙地址；configuredHertz 表明回报率是配置值。读取失败返回非零 CLI 退出码；设备在读取期间未变化时，仍输出错误和有效的部分值。默认不收集序列号或输入内容。USB 的 VersionNumber / bcdDevice 不当作真实固件版本。
 
 如列表为空，先确认 USB 接收器或蓝牙连接，再手动刷新，并用 `--all`、`hidutil list` 和 `ioreg` 交叉核对。当前版本不以“授予全部隐私权限”作为排障方法。接收器存在不保证无线外设在线。Razer/Synapse 驱动被观察到时，界面会提示，程序不会停止或卸载它们。
 

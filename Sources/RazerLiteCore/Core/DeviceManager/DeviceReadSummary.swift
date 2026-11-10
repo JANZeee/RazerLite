@@ -39,20 +39,20 @@ public struct DeviceReadSummary: Codable, Equatable, Sendable {
     public static func assess(battery: BatteryReading? = nil, mouse: MouseTelemetry? = nil, systemBattery: SystemBatteryReading? = nil,
                               polling: MousePollingReading? = nil, charging: MouseChargingReading? = nil,
                               keyboardBattery: KeyboardPowerReading? = nil, keyboardCharging: KeyboardPowerReading? = nil,
-                              isReading: Bool = false,
+                              keyboardBrightness: KeyboardBrightnessReading? = nil, isReading: Bool = false,
                               isSuspended: Bool = false, isDraining: Bool = false, hasCancelledRead: Bool = false) -> DeviceReadSummary {
         let lastDate = [battery?.acquiredAt, mouse?.readAt, systemBattery?.acquiredAt, polling?.readAt, charging?.readAt,
-                        keyboardBattery?.readAt, keyboardCharging?.readAt].compactMap { $0 }.max()
+                        keyboardBattery?.readAt, keyboardCharging?.readAt, keyboardBrightness?.readAt].compactMap { $0 }.max()
         let state: DeviceReadState
         let hasDeviceValue = battery?.isValid == true && battery?.source == .device
             || (battery == nil && (mouse?.batteryPercent != nil || keyboardBattery?.hasValue == true))
-            || mouse?.dpi != nil || polling?.configuredHertz != nil || charging?.state != nil || keyboardCharging?.hasValue == true
+            || mouse?.dpi != nil || polling?.configuredHertz != nil || charging?.state != nil || keyboardCharging?.hasValue == true || keyboardBrightness?.hasValue == true
         let hasSystemValue = battery?.isValid == true && battery?.source == .systemCache
             || (battery == nil && systemBattery?.percent != nil && systemBattery?.source != nil)
         let mouseFailure = mouse?.issues.contains { battery == nil || $0.field != "battery" } == true
         let hasFailure = battery.map { !$0.isValid } == true || mouseFailure
             || (battery == nil && (systemBattery?.issue != nil || systemBattery?.failureKind != nil || keyboardBattery?.issue != nil))
-            || polling?.issue != nil || charging?.issue != nil || keyboardCharging?.issue != nil
+            || polling?.issue != nil || charging?.issue != nil || keyboardCharging?.issue != nil || keyboardBrightness.map({ !$0.hasValue }) == true
         if isSuspended { state = .suspended }
         else if isDraining { state = .waiting }
         else if isReading { state = .reading }
@@ -60,7 +60,7 @@ public struct DeviceReadSummary: Codable, Equatable, Sendable {
         else if hasDeviceValue { state = .deviceResponse }
         else if hasSystemValue { state = .systemMetadata }
         else if hasCancelledRead { state = .cancelled }
-        else if battery != nil || mouse != nil || systemBattery != nil || polling != nil || charging != nil || keyboardBattery != nil || keyboardCharging != nil { state = .unconfirmed }
+        else if battery != nil || mouse != nil || systemBattery != nil || polling != nil || charging != nil || keyboardBattery != nil || keyboardCharging != nil || keyboardBrightness != nil { state = .unconfirmed }
         else { state = .discovered }
         return DeviceReadSummary(state: state, lastResultAt: lastDate)
     }

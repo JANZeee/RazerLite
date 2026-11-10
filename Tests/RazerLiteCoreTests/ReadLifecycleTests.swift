@@ -186,7 +186,7 @@ struct ReadLifecycleTests {
         #expect(manager.readSummary(for: device.id).state == .unconfirmed)
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(DiagnosticSnapshot.self, from: manager.snapshotData())
-        #expect(snapshot.schemaVersion == 10)
+        #expect(snapshot.schemaVersion == 11)
         #expect(snapshot.adapterAssessments?[device.id]?.capability("charging") == failed)
         #expect(snapshot.connectionCheck == manager.connectionCheck())
         manager.suspend(); manager.resume()

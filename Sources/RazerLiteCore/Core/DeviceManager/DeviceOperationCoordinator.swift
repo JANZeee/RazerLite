@@ -1,15 +1,16 @@
 import Foundation
 
 enum DeviceOperation: Sendable {
-    case mouse, battery, polling, charging, keyboardBattery, keyboardCharging, systemBattery, dpiPrepare, dpiApply, pollingPrepare, pollingApply
+    case mouse, battery, polling, charging, keyboardBattery, keyboardCharging, systemBattery, dpiPrepare, dpiApply, pollingPrepare, pollingApply, keyboardBrightness, brightnessPrepare, brightnessApply
 
     var fields: Set<String> {
         switch self {
         case .mouse: ["battery", "dpi", "stages"]
         case .polling: ["polling"]
+        case .keyboardBrightness: ["brightness"]
         case .charging, .keyboardCharging: ["charging"]
         case .battery, .keyboardBattery, .systemBattery: ["battery"]
-        case .dpiPrepare, .dpiApply, .pollingPrepare, .pollingApply: []
+        case .dpiPrepare, .dpiApply, .pollingPrepare, .pollingApply, .brightnessPrepare, .brightnessApply: []
         }
     }
 }
@@ -57,7 +58,8 @@ final class DeviceOperationCoordinator {
         for device in devices {
             let route: Route
             if let interface = ViperV4Adapter.controlInterface(in: device)
-                ?? BlackWidowLowProfileAdapter.controlInterface(in: device) {
+                ?? BlackWidowLowProfileAdapter.controlInterface(in: device)
+                ?? ReclusaLightingAdapter.controlInterface(in: device) {
                 route = .hid(interface)
             } else if SystemBatteryService.canRead(device) {
                 route = .system(device)

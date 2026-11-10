@@ -14,7 +14,7 @@ struct ObservedModelCatalogTests {
               registryClass: "Fixture", observedDrivers: [], isVirtual: virtual)
     }
 
-    @Test func compositeKeyboardWithMouseInterfaceIsIdentifiedWithoutGrantingCommands() throws {
+    @Test func compositeKeyboardKeepsObservedIdentityAndUsesSeparateReviewedBrightnessRoute() throws {
         let device = DeviceInfo.group([interface(0, usage: 2), interface(1), interface(2), interface(3, usage: 1)])[0]
         #expect(device.interfaces.count == 4)
         #expect(device.kind == .keyboard)
@@ -22,11 +22,11 @@ struct ObservedModelCatalogTests {
         #expect(device.product == "Razer Reclusa Mini 65%")
         #expect(RazerModelCatalog.lookup(vendorID: 0x1532, productID: 0x02F5) == nil)
         #expect(DeviceReadRegistry.backends(for: device).isEmpty)
-        #expect(AdapterManifestCatalog.manifest(for: device) == nil)
+        #expect(AdapterManifestCatalog.manifest(for: device)?.id == AdapterManifestCatalog.reclusaLighting.id)
         let assessment = AdapterCatalog.assess(device)
-        #expect(!assessment.interfaceMatched)
-        #expect(assessment.sourceURL == ModelReferenceSource.localObservation.url)
-        #expect(assessment.capabilities.filter(\.routeAvailable).map(\.id) == ["discovery"])
+        #expect(assessment.interfaceMatched && ReclusaBrightnessReadService.canRead(device))
+        #expect(assessment.sourceURL == AdapterManifestCatalog.reclusaLighting.sources.first?.url)
+        #expect(assessment.capabilities.filter(\.routeAvailable).map(\.id) == ["discovery", "brightness", "brightnessWrite"])
         for id in ["rgb", "battery", "charging", "dpiWrite", "pollingWrite"] {
             #expect(assessment.capability(id)?.implementation == .notImplemented)
         }
@@ -34,7 +34,7 @@ struct ObservedModelCatalogTests {
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(DiagnosticSnapshot.self, from: snapshot.jsonData())
         #expect(decoded.devices.first?.kind == .keyboard)
-        #expect(decoded.adapterAssessments?[device.id]?.sourceURL == ModelReferenceSource.localObservation.url)
+        #expect(decoded.adapterAssessments?[device.id]?.sourceURL == AdapterManifestCatalog.reclusaLighting.sources.first?.url)
     }
 
     @Test func nearbyModelsNamesTransportsAndVirtualDevicesCannotBorrowObservation() {
@@ -75,13 +75,13 @@ struct ObservedModelCatalogTests {
     }
 
     #if DEBUG
-    @MainActor @Test func offlineScenarioDoesNotCreateReadingsOrPrivateRoutes() async throws {
+    @MainActor @Test func offlineUnreadScenarioDoesNotCreateReadingsOrBatteryRoutes() async throws {
         let session = try OfflineScenarioSession()
         await session.load(.observedKeyboard)
         let device = try #require(session.manager.physicalDevices.first)
         #expect(device.interfaces.count == 4 && device.kind == .keyboard)
         #expect(session.manager.mouseReadouts.isEmpty)
-        #expect(session.manager.keyboardBatteryReadouts.isEmpty)
+        #expect(session.manager.keyboardBatteryReadouts.isEmpty && session.manager.keyboardBrightnessReadouts.isEmpty)
         #expect(DeviceReadRegistry.backends(for: device).isEmpty)
         #expect(await session.services.operations.isEmpty)
     }

@@ -72,6 +72,9 @@ public struct DeviceAdapterManifest: Codable, Equatable, Identifiable, Sendable 
     public let features: [AdapterFeatureEvidence]
 
     public func matchesIdentity(_ device: DeviceInfo) -> Bool {
+        if id == "reclusa-mini65-usb-lighting" {
+            return ReclusaLightingAdapter.controlInterface(in: device) != nil
+        }
         guard device.isRazer, !device.isVirtual, !device.interfaces.isEmpty else { return false }
         return device.interfaces.allSatisfy { interface in
             vendorIDs.contains(interface.vendorID ?? -1) && (productIDs.isEmpty || productIDs.contains(interface.productID ?? -1))
@@ -123,8 +126,27 @@ public enum AdapterManifestCatalog {
         features: [
             feature("battery", .simulationTested, "独立电量试读，待 macOS 真机验收。", ["docs/PHASE08_KEYBOARD_POWER.md"], samples: ["Tests/RazerLiteCoreTests/KeyboardPowerTests.swift"]),
             feature("charging", .simulationTested, "独立充电试读，待 macOS 真机验收。", ["docs/PHASE08_KEYBOARD_POWER.md"], samples: ["Tests/RazerLiteCoreTests/KeyboardPowerTests.swift"]),
-            feature("rgb", .sourceReviewed, "公开驱动有型号线索；本应用只有本地灯光预览，没有设备控制实现。", ["docs/PHASE08_KEYBOARD_POWER.md"], implemented: false),
+            feature("rgb", .sourceReviewed, "公开驱动有型号线索；本应用未实现此键盘的灯光控制。", ["docs/PHASE08_KEYBOARD_POWER.md"], implemented: false),
             feature("polling", .sourceReviewed, "公开驱动有型号线索；本应用未实现此键盘的回报率查询。", ["docs/PHASE08_KEYBOARD_POWER.md"], implemented: false)
+        ])
+
+    public static let reclusaLighting = DeviceAdapterManifest(
+        id: "reclusa-mini65-usb-lighting", name: "Reclusa Mini 65% · USB 亮度", deviceKind: .keyboard,
+        vendorIDs: [0x1532], productIDs: [0x02F5], transports: ["USB"], transportPrefix: nil,
+        fingerprint: .init(interfaceNumber: 3, usagePage: 0x0C, usage: 1, inputBytes: 0, outputBytes: 0, featureBytes: 90),
+        firmwareScope: "本机固件未查询；2026-11-10 的 02F5 读回只证明指定接口的 profile 1 亮度查询，写入和跨重启持久性尚待真机验收。",
+        sources: [
+            .init(url: URL(string: "https://apps.razer.com/synapse/products/756/mw/main.4ac4b05541bb1859fa0e.js")!,
+                  revision: "sha256:5e7adbd276b0da6a4a4f06c6dbc7d7b07400b3fd7fd17eb8eea54a7948b4923d", scope: "756/757/758 精确身份与 interface 3"),
+            .init(url: URL(string: "https://apps.razer.com/synapse/products/756/mw/rzDevice25.40fe6f559bba152076d4.js")!,
+                  revision: "sha256:9788a6b975de1b2eb771d167318b74f0d45359a6b0039ff7582af011e9632de3", scope: "灯区、亮度查询与设置的字段和响应"),
+            .init(url: URL(string: "https://apps.razer.com/synapse/products/756/mw/rzDevice25DualLinkKeyboard.3b347518a00a88ca9641.js")!,
+                  revision: "sha256:c0df14003004b0cd128aef0932667851c61e0f6bda7bdb4da77fddeadb33b1e8", scope: "02F5 接收器 DualLink 事务号"),
+            .init(url: URL(string: "https://apps.razer.com/synapse/products/756/mw/6737.90f8e2e80827f3801f8e.js")!,
+                  revision: "sha256:a8486d90275407cfc1c9e7b21b2017cc74a5720a5c7b6aa330c51bb3cd8d46db", scope: "连接工厂和 profile 1 亮度目标；不执行模式切换或板载同步")
+        ], features: [
+            feature("brightness", .hardwareValidated, "本机 02F5 在 2026-11-10T14:01:59Z 返回 region 5 / profile 1 / raw 255；只代表读取时的配置。", ["docs/KEYBOARD_LIGHTING.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaBrightnessTests.swift"]),
+            feature("brightnessWrite", .simulationTested, "明确确认后单次设置 profile 1 并读回；写入未真机验收，不改模式或同步其他板载槽。", ["docs/KEYBOARD_LIGHTING.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaBrightnessControlTests.swift", "Tests/RazerLiteCoreTests/KeyboardBrightnessLifecycleTests.swift"])
         ])
 
     public static let bluetooth = DeviceAdapterManifest(
@@ -135,7 +157,7 @@ public enum AdapterManifestCatalog {
                         scope: "系统 HID 属性；电量缺失时按精确身份取得 macOS 蓝牙快照")],
         features: [feature("battery", .softwareTested, "系统属性与身份关联经过测试；是否发布电量由具体设备和 macOS 决定。", ["docs/SYSTEM_BATTERY.md"], samples: ["Tests/RazerLiteCoreTests/SystemBatteryTests.swift"])])
 
-    public static let all: [DeviceAdapterManifest] = [viper, keyboard, bluetooth]
+    public static let all: [DeviceAdapterManifest] = [viper, keyboard, reclusaLighting, bluetooth]
 
     public static func manifest(for device: DeviceInfo) -> DeviceAdapterManifest? {
         all.first { $0.matchesIdentity(device) }

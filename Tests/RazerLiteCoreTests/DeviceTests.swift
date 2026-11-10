@@ -68,7 +68,7 @@ struct DeviceTests {
         decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(DiagnosticSnapshot.self, from: data)
         #expect(decoded.devices == snapshot.devices)
-        #expect(decoded.schemaVersion == 10)
+        #expect(decoded.schemaVersion == 11)
         let text = String(decoding: data, as: UTF8.self)
         #expect(!text.contains("firmwareVersion"))
         #expect(!text.contains("serialNumber"))

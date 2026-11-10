@@ -31,7 +31,7 @@ struct OfflineScenarioTests {
         #expect(session.manager.pollingReadouts[second.id]?.configuredHertz == 1000)
         #expect(session.manager.mouseReadouts[first.id] == nil)
         let data = try snapshot(session)
-        #expect(data.schemaVersion == 10 && data.pollingWriteResults?[first.id]?.outcome == .verified)
+        #expect(data.schemaVersion == 11 && data.pollingWriteResults?[first.id]?.outcome == .verified)
         #expect(data.adapterAssessments?[first.id]?.capability("pollingWrite")?.evidence.level == .simulationTested)
         await session.manager.readPollingRate(for: first.id)
         #expect(session.manager.pollingReadouts[first.id]?.configuredHertz == 2000)

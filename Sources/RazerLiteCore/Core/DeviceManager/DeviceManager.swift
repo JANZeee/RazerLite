@@ -41,6 +41,17 @@ public final class DeviceManager: ObservableObject {
     @Published public private(set) var pollingWriteBusyIDs: Set<String> = []
     @Published public private(set) var pollingWriteErrors: [String: String] = [:]
     @Published public private(set) var pollingWriteResults: [String: PollingRateWriteResult] = [:]
+    @Published public private(set) var keyboardBrightnessReadouts: [String: KeyboardBrightnessReading] = [:]
+    @Published public private(set) var readingKeyboardBrightnessIDs: Set<String> = []
+    @Published public private(set) var pendingBrightnessChanges: [String: KeyboardBrightnessPlan] = [:]
+    @Published public private(set) var brightnessWriteBusyIDs: Set<String> = []
+    @Published public private(set) var brightnessWriteErrors: [String: String] = [:]
+    @Published public private(set) var brightnessWriteResults: [String: KeyboardBrightnessWriteResult] = [:]
+    private let brightnessReader: any KeyboardBrightnessReadingService
+    private let brightnessController: any KeyboardBrightnessControlling
+    private var activeBrightnessPlans: [String: KeyboardBrightnessPlan] = [:]
+    private var brightnessReadingInterfaces: [String: HIDInterface] = [:]
+    private var brightnessResultInterfaces: [String: HIDInterface] = [:]
     private let pollingController: any PollingRateControlling
     private var activePollingPlans: [String: PollingRatePlan] = [:]
     private var pollingResultInterfaces: [String: HIDInterface] = [:]
@@ -79,6 +90,8 @@ public final class DeviceManager: ObservableObject {
                 systemBatteryReader: any SystemBatteryReadingService = SystemBatteryService(),
                 pollingReader: any MousePollingReadingService = PollingRateReadService(),
                 pollingController: any PollingRateControlling = PollingRateControlService(),
+                brightnessReader: any KeyboardBrightnessReadingService = ReclusaBrightnessReadService(),
+                brightnessController: any KeyboardBrightnessControlling = ReclusaBrightnessControlService(),
                 chargingReader: any MouseChargingReadingService = ChargingReadService(),
                 keyboardPowerReader: any KeyboardPowerReadingService = KeyboardPowerReadService(),
                 batteryReader: any BatteryReadingService = ViperBatteryReadService(), isSimulation: Bool = false) {
@@ -86,6 +99,7 @@ public final class DeviceManager: ObservableObject {
             precondition(!(discovery is HIDDiscovery) && !(mouseReader is MouseReadService)
                 && !(dpiController is MouseDPIService) && !(systemBatteryReader is SystemBatteryService)
                 && !(pollingController is PollingRateControlService) && !(pollingReader is PollingRateReadService) && !(chargingReader is ChargingReadService)
+                && !(brightnessReader is ReclusaBrightnessReadService) && !(brightnessController is ReclusaBrightnessControlService)
                 && !(keyboardPowerReader is KeyboardPowerReadService) && !(batteryReader is ViperBatteryReadService), "模拟模式必须替换全部真实设备服务")
         }
         self.isSimulation = isSimulation
@@ -94,6 +108,8 @@ public final class DeviceManager: ObservableObject {
         self.mouseReader = mouseReader
         self.dpiController = dpiController
         self.systemBatteryReader = systemBatteryReader
+        self.brightnessReader = brightnessReader
+        self.brightnessController = brightnessController
         self.pollingReader = pollingReader
         self.pollingController = pollingController
         self.chargingReader = chargingReader
@@ -135,6 +151,7 @@ public final class DeviceManager: ObservableObject {
         mouseReadouts.removeAll()
         mouseReadingInterfaces.removeAll()
         clearPollingReads()
+        clearBrightnessReads()
         clearChargingReads()
         clearKeyboardReads()
         readingSystemBatteryIDs.removeAll()
@@ -144,6 +161,9 @@ public final class DeviceManager: ObservableObject {
         pollingWriteResults.removeAll()
         pollingResultInterfaces.removeAll()
         pollingWriteErrors.removeAll()
+        brightnessWriteResults.removeAll()
+        brightnessResultInterfaces.removeAll()
+        brightnessWriteErrors.removeAll()
         dpiWriteResults.removeAll()
         dpiResultInterfaces.removeAll()
         dpiErrors.removeAll()
@@ -212,6 +232,36 @@ public final class DeviceManager: ObservableObject {
         }
     }
 
+    public func readKeyboardBrightness(for deviceID: String) async {
+        guard let device = devices.first(where: { $0.id == deviceID }),
+              let interface = ReclusaLightingAdapter.controlInterface(in: device),
+              let ticket = beginRead(.keyboardBrightness, for: deviceID) else { return }
+        defer { finishOperation(ticket) }
+        keyboardBrightnessReadouts.removeValue(forKey: deviceID)
+        brightnessReadingInterfaces.removeValue(forKey: deviceID)
+        hasRequestedQueries = true
+        let result = await performRead(ticket) { await self.brightnessReader.read(device) }
+        guard !Task.isCancelled, operations.isCurrent(ticket),
+              let current = devices.first(where: { $0.id == deviceID }),
+              let currentInterface = ReclusaLightingAdapter.controlInterface(in: current),
+              currentInterface.matchesSession(interface) else { return }
+        let reading: KeyboardBrightnessReading
+        if result.deviceID != deviceID || result.interfaceID != interface.id {
+            reading = .init(deviceID: deviceID, interfaceID: interface.id, profileID: 1,
+                regionID: nil, rawBrightness: nil, percent: nil,
+                issue: .init(field: "brightness", message: "亮度响应身份不匹配，已丢弃；请重新读取。", kind: .protocolMismatch), readAt: .now)
+        } else if !result.hasValue {
+            reading = .init(deviceID: deviceID, interfaceID: interface.id, profileID: 1,
+                regionID: result.regionID, rawBrightness: nil, percent: nil,
+                issue: result.issue ?? .init(field: "brightness", message: "本次没有取得有效亮度值。", kind: .invalidData), readAt: result.readAt)
+        } else { reading = result }
+        keyboardBrightnessReadouts[deviceID] = reading
+        brightnessReadingInterfaces[deviceID] = currentInterface
+        rememberSuccessfulReadings(for: device, fields: ["brightness"])
+        record(reading.issue.map { "亮度读取失败：\($0.message)" } ?? "\(device.product) 亮度配置已读取。",
+               isError: reading.issue != nil, presentError: false)
+    }
+
     public func readChargingState(for deviceID: String) async {
         guard let device = devices.first(where: { $0.id == deviceID }),
               let interface = ViperV4Adapter.controlInterface(in: device),
@@ -269,10 +319,10 @@ public final class DeviceManager: ObservableObject {
     public func readSummary(for deviceID: String) -> DeviceReadSummary {
         DeviceReadSummary.assess(battery: batteryReadouts[deviceID], mouse: mouseReadouts[deviceID], systemBattery: systemBatteryReadings[deviceID],
                                  polling: pollingReadouts[deviceID], charging: chargingReadouts[deviceID],
-                                 keyboardBattery: keyboardBatteryReadouts[deviceID], keyboardCharging: keyboardChargingReadouts[deviceID],
+                                 keyboardBattery: keyboardBatteryReadouts[deviceID], keyboardCharging: keyboardChargingReadouts[deviceID], keyboardBrightness: keyboardBrightnessReadouts[deviceID],
                                  isReading: readingBatteryIDs.contains(deviceID) || readingDeviceIDs.contains(deviceID) || readingPollingDeviceIDs.contains(deviceID)
                                     || readingSystemBatteryIDs.contains(deviceID) || readingChargingDeviceIDs.contains(deviceID)
-                                    || readingKeyboardPowerIDs.contains(deviceID),
+                                    || readingKeyboardPowerIDs.contains(deviceID) || readingKeyboardBrightnessIDs.contains(deviceID),
                                  isSuspended: isSuspended, isDraining: drainingOperationIDs.contains(deviceID),
                                  hasCancelledRead: cancelledReadFields[deviceID]?.isEmpty == false)
     }
@@ -282,6 +332,7 @@ public final class DeviceManager: ObservableObject {
         return .init(reading: reading, isSuspended: isSuspended, dpiBusy: dpiBusyIDs.contains(deviceID),
                      dpiAwaitingConfirmation: pendingDPIChanges[deviceID] != nil,
                      pollingWriteBusy: pollingWriteBusyIDs.contains(deviceID), pollingAwaitingConfirmation: pendingPollingChanges[deviceID] != nil,
+                     brightnessWriteBusy: brightnessWriteBusyIDs.contains(deviceID), brightnessAwaitingConfirmation: pendingBrightnessChanges[deviceID] != nil,
                      isDraining: drainingOperationIDs.contains(deviceID), cancelled: cancelledReadFields[deviceID] ?? [],
                      previousReadings: lastSuccessfulReadings[deviceID] ?? [:])
     }
@@ -289,8 +340,8 @@ public final class DeviceManager: ObservableObject {
     public func adapterAssessment(for device: DeviceInfo) -> AdapterAssessment {
         AdapterCatalog.assess(device, battery: batteryReadouts[device.id], telemetry: mouseReadouts[device.id], systemBattery: systemBatteryReadings[device.id],
             polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
-            keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id],
-            activity: capabilityActivity(for: device.id), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id], simulation: isSimulation)
+            keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id], keyboardBrightness: keyboardBrightnessReadouts[device.id],
+            activity: capabilityActivity(for: device.id), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id], brightnessWrite: brightnessWriteResults[device.id], simulation: isSimulation)
     }
 
     public func connectionCheck() -> ConnectionCheckReport {
@@ -335,6 +386,7 @@ public final class DeviceManager: ObservableObject {
         mouseReadouts.removeAll()
         mouseReadingInterfaces.removeAll()
         clearPollingReads()
+        clearBrightnessReads()
         clearChargingReads()
         clearKeyboardReads()
         readingSystemBatteryIDs.removeAll()
@@ -344,6 +396,9 @@ public final class DeviceManager: ObservableObject {
         pollingWriteResults.removeAll()
         pollingResultInterfaces.removeAll()
         pollingWriteErrors.removeAll()
+        brightnessWriteResults.removeAll()
+        brightnessResultInterfaces.removeAll()
+        brightnessWriteErrors.removeAll()
         dpiWriteResults.removeAll()
         dpiResultInterfaces.removeAll()
         dpiErrors.removeAll()
@@ -372,7 +427,7 @@ public final class DeviceManager: ObservableObject {
 
     private func prepareDPIChange(for deviceID: String, prepare: (DeviceInfo) async throws -> MouseDPIPlan) async {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !operations.isBusy(deviceID),
-              dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
+              dpiRequests[deviceID] == nil, pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil, pendingBrightnessChanges[deviceID] == nil,
               let device = devices.first(where: { $0.id == deviceID }),
               let interface = ViperV4Adapter.controlInterface(in: device),
               let ticket = operations.begin(.dpiPrepare, for: deviceID) else { return }
@@ -495,6 +550,11 @@ public final class DeviceManager: ObservableObject {
         pendingPollingChanges.removeAll()
         activePollingPlans.removeAll()
         for id in pollingWriteBusyIDs { operations.cancelActive(for: id) }
+        for plan in pendingBrightnessChanges.values { plan.invalidate() }
+        for plan in activeBrightnessPlans.values { plan.invalidate() }
+        pendingBrightnessChanges.removeAll()
+        activeBrightnessPlans.removeAll()
+        for id in brightnessWriteBusyIDs { operations.cancelActive(for: id) }
         syncOperationActivity()
     }
 
@@ -578,6 +638,87 @@ public final class DeviceManager: ObservableObject {
         record(result.message, isError: result.outcome != .verified, presentError: false)
     }
 
+    public func prepareBrightnessChange(for deviceID: String, percent: Int) async {
+        guard isMonitoring, !isSuspended, !Task.isCancelled, !isDeviceBusy(deviceID),
+              let device = devices.first(where: { $0.id == deviceID }),
+              let interface = ReclusaLightingAdapter.controlInterface(in: device),
+              let ticket = operations.begin(.brightnessPrepare, for: deviceID) else { return }
+        defer { finishOperation(ticket) }
+        syncOperationActivity()
+        brightnessWriteErrors.removeValue(forKey: deviceID)
+        brightnessWriteResults.removeValue(forKey: deviceID)
+        brightnessResultInterfaces.removeValue(forKey: deviceID)
+        keyboardBrightnessReadouts.removeValue(forKey: deviceID)
+        brightnessReadingInterfaces.removeValue(forKey: deviceID)
+        hasRequestedQueries = true
+        do {
+            let plan = try await brightnessController.prepare(device, percent: percent)
+            guard !Task.isCancelled, operations.isCurrent(ticket), isMonitoring else { plan.invalidate(); return }
+            guard plan.deviceID == deviceID, plan.interface.matchesSession(interface),
+                  plan.before.hasValue, plan.before.deviceID == deviceID, plan.before.interfaceID == interface.id,
+                  plan.afterPercent == percent else {
+                plan.invalidate(); throw DeviceQueryError.deviceChanged
+            }
+            pendingBrightnessChanges[deviceID] = plan
+            keyboardBrightnessReadouts[deviceID] = plan.before
+            brightnessReadingInterfaces[deviceID] = interface
+            rememberSuccessfulReadings(for: device, fields: ["brightness"])
+            record("\(device.product) 亮度变更已检查，等待明确确认；尚未写入。")
+        } catch {
+            guard !Task.isCancelled, operations.isCurrent(ticket) else { return }
+            brightnessWriteErrors[deviceID] = error.localizedDescription
+            record("亮度检查失败：\(error.localizedDescription)", isError: true, presentError: false)
+        }
+    }
+
+    public func cancelBrightnessChange(for deviceID: String) {
+        pendingBrightnessChanges.removeValue(forKey: deviceID)?.invalidate()
+        if operations.activeOperation(for: deviceID) == .brightnessPrepare {
+            operations.cancelActive(for: deviceID)
+            syncOperationActivity()
+        }
+    }
+
+    public func confirmBrightnessChange(for deviceID: String, planID: UUID) async {
+        guard isMonitoring, !isSuspended, !Task.isCancelled, !operations.isBusy(deviceID),
+              let plan = pendingBrightnessChanges[deviceID], plan.id == planID,
+              let ticket = operations.begin(.brightnessApply, for: deviceID) else { return }
+        pendingBrightnessChanges.removeValue(forKey: deviceID)
+        activeBrightnessPlans[deviceID] = plan
+        defer {
+            if activeBrightnessPlans[deviceID]?.id == plan.id { activeBrightnessPlans.removeValue(forKey: deviceID) }
+            finishOperation(ticket)
+        }
+        syncOperationActivity()
+        keyboardBrightnessReadouts.removeValue(forKey: deviceID)
+        brightnessReadingInterfaces.removeValue(forKey: deviceID)
+        hasConfirmedDeviceWrite = true
+        record("用户确认 \(plan.deviceName) 亮度配置 → \(plan.afterPercent)%；单次提交并读回。")
+        let result = await withTaskCancellationHandler {
+            await brightnessController.apply(plan)
+        } onCancel: { plan.invalidate() }
+        guard !Task.isCancelled, operations.isCurrent(ticket), isMonitoring else { return }
+        guard result.deviceID == deviceID, result.interfaceID == plan.interface.id else {
+            brightnessWriteErrors[deviceID] = "控制结果身份不匹配；结果不确定，请重新读取。"
+            return
+        }
+        if result.outcome == .verified {
+            guard let reading = result.readback, reading.hasValue,
+                  reading.deviceID == deviceID, reading.interfaceID == plan.interface.id,
+                  reading.profileID == plan.before.profileID, reading.regionID == plan.before.regionID,
+                  reading.rawBrightness == plan.afterRaw else {
+                brightnessWriteErrors[deviceID] = "亮度读回与确认目标不一致；结果不确定，请重新读取。"
+                return
+            }
+            keyboardBrightnessReadouts[deviceID] = reading
+            brightnessReadingInterfaces[deviceID] = plan.interface
+            if let device = devices.first(where: { $0.id == deviceID }) { rememberSuccessfulReadings(for: device, fields: ["brightness"]) }
+        }
+        brightnessWriteResults[deviceID] = result
+        brightnessResultInterfaces[deviceID] = plan.interface
+        record(result.message, isError: result.outcome != .verified, presentError: false)
+    }
+
     public func clearError() { lastError = nil }
     public func snapshotData() throws -> Data {
         try DiagnosticSnapshot(interfaces: interfaces, batteryReadouts: batteryReadouts, mouseReadouts: mouseReadouts, dpiWriteResults: dpiWriteResults, pollingWriteResults: pollingWriteResults,
@@ -585,6 +726,7 @@ public final class DeviceManager: ObservableObject {
                                pollingReadouts: pollingReadouts,
                                chargingReadouts: chargingReadouts,
                                keyboardBatteryReadouts: keyboardBatteryReadouts, keyboardChargingReadouts: keyboardChargingReadouts,
+                               keyboardBrightnessReadouts: keyboardBrightnessReadouts, brightnessWriteResults: brightnessWriteResults,
                                readSummaries: Dictionary(uniqueKeysWithValues: devices.map { ($0.id, readSummary(for: $0.id)) }),
                                activities: Dictionary(uniqueKeysWithValues: devices.map { ($0.id, capabilityActivity(for: $0.id)) }),
                                isMonitoring: isMonitoring, isSuspended: isSuspended,
@@ -600,6 +742,26 @@ public final class DeviceManager: ObservableObject {
         for id in changed { lastSuccessfulReadings.removeValue(forKey: id); cancelledReadFields.removeValue(forKey: id); batteryReadouts.removeValue(forKey: id) }
         syncOperationActivity()
         let connected = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
+        let lighting = Dictionary(uniqueKeysWithValues: devices.compactMap { device in
+            ReclusaLightingAdapter.controlInterface(in: device).map { (device.id, $0) }
+        })
+        keyboardBrightnessReadouts = keyboardBrightnessReadouts.filter { id, reading in
+            guard let current = lighting[id], let expected = brightnessReadingInterfaces[id] else { return false }
+            return reading.interfaceID == current.id && current.matchesSession(expected)
+        }
+        brightnessReadingInterfaces = brightnessReadingInterfaces.filter { keyboardBrightnessReadouts[$0.key] != nil }
+        for (id, plan) in pendingBrightnessChanges where lighting[id]?.matchesSession(plan.interface) != true {
+            cancelBrightnessChange(for: id)
+        }
+        for (id, plan) in activeBrightnessPlans where lighting[id]?.matchesSession(plan.interface) != true {
+            activeBrightnessPlans.removeValue(forKey: id)?.invalidate()
+        }
+        brightnessWriteErrors = brightnessWriteErrors.filter { lighting[$0.key] != nil }
+        brightnessWriteResults = brightnessWriteResults.filter { id, result in
+            guard let current = lighting[id], let expected = brightnessResultInterfaces[id] else { return false }
+            return result.interfaceID == current.id && current.matchesSession(expected)
+        }
+        brightnessResultInterfaces = brightnessResultInterfaces.filter { brightnessWriteResults[$0.key] != nil }
         let keyboard = Dictionary(uniqueKeysWithValues: devices.compactMap { device in
             BlackWidowLowProfileAdapter.controlInterface(in: device).map { (device.id, $0) }
         })
@@ -671,7 +833,7 @@ public final class DeviceManager: ObservableObject {
     }
 
     public func isDeviceBusy(_ id: String) -> Bool {
-        operations.isBusy(id) || pendingDPIChanges[id] != nil || pendingPollingChanges[id] != nil
+        operations.isBusy(id) || pendingDPIChanges[id] != nil || pendingPollingChanges[id] != nil || pendingBrightnessChanges[id] != nil
     }
 
     public func batterySummary(for device: DeviceInfo) -> MenuBatterySummary? {
@@ -752,7 +914,7 @@ public final class DeviceManager: ObservableObject {
 
     private func beginRead(_ operation: DeviceOperation, for deviceID: String) -> DeviceOperationTicket? {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !dpiBusyIDs.contains(deviceID),
-              pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
+              pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil, pendingBrightnessChanges[deviceID] == nil,
               let ticket = operations.begin(operation, for: deviceID) else { return nil }
         cancelledReadFields[deviceID]?.subtract(operation.fields)
         syncOperationActivity()
@@ -786,6 +948,8 @@ public final class DeviceManager: ObservableObject {
         }
         readingBatteryIDs = ids(.battery)
         readingDeviceIDs = ids(.mouse)
+        readingKeyboardBrightnessIDs = ids(.keyboardBrightness)
+        brightnessWriteBusyIDs = ids(.brightnessPrepare).union(ids(.brightnessApply))
         readingPollingDeviceIDs = ids(.polling)
         pollingWriteBusyIDs = ids(.pollingPrepare).union(ids(.pollingApply))
         readingChargingDeviceIDs = ids(.charging)
@@ -797,7 +961,7 @@ public final class DeviceManager: ObservableObject {
     private func rememberSuccessfulReadings(for device: DeviceInfo, fields: Set<String>) {
         let assessment = AdapterCatalog.assess(device, battery: batteryReadouts[device.id], telemetry: mouseReadouts[device.id],
             systemBattery: systemBatteryReadings[device.id], polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
-            keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id], simulation: isSimulation)
+            keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id], keyboardBrightness: keyboardBrightnessReadouts[device.id], simulation: isSimulation)
         for capability in assessment.capabilities where fields.contains(capability.id) && capability.session.state == .succeeded {
             if let sample = capability.session.sample { lastSuccessfulReadings[device.id, default: [:]][capability.id] = sample }
         }
@@ -807,6 +971,12 @@ public final class DeviceManager: ObservableObject {
         readingPollingDeviceIDs.removeAll()
         pollingReadouts.removeAll()
         pollingReadingInterfaces.removeAll()
+    }
+
+    private func clearBrightnessReads() {
+        readingKeyboardBrightnessIDs.removeAll()
+        keyboardBrightnessReadouts.removeAll()
+        brightnessReadingInterfaces.removeAll()
     }
 
     private func clearChargingReads() {

@@ -18,6 +18,8 @@ public struct DiagnosticSnapshot: Codable, Sendable {
     public let chargingReadouts: [String: MouseChargingReading]?
     public let keyboardBatteryReadouts: [String: KeyboardPowerReading]?
     public let keyboardChargingReadouts: [String: KeyboardPowerReading]?
+    public let keyboardBrightnessReadouts: [String: KeyboardBrightnessReading]?
+    public let brightnessWriteResults: [String: KeyboardBrightnessWriteResult]?
     public let readSummaries: [String: DeviceReadSummary]
     /// Optional so historical schema 6 exports remain decodable. Present since schema 7.
     public let adapterManifests: [DeviceAdapterManifest]?
@@ -30,20 +32,23 @@ public struct DiagnosticSnapshot: Codable, Sendable {
                 chargingReadouts: [String: MouseChargingReading] = [:],
                 keyboardBatteryReadouts: [String: KeyboardPowerReading] = [:],
                 keyboardChargingReadouts: [String: KeyboardPowerReading] = [:],
+                keyboardBrightnessReadouts: [String: KeyboardBrightnessReading] = [:],
+                brightnessWriteResults: [String: KeyboardBrightnessWriteResult] = [:],
                 readSummaries: [String: DeviceReadSummary]? = nil,
                 activities: [String: CapabilityActivity] = [:], isMonitoring: Bool = true, isSuspended: Bool = false,
                 queriesRequested: Bool = false, systemMetadataRequested: Bool = false,
                 automaticBatteryRequested: Bool = false, settingRequested: Bool = false, simulation: Bool = false) {
-        schemaVersion = 10
-        applicationVersion = "0.11.6-daily-reliability"
+        schemaVersion = 11
+        applicationVersion = "0.12.0-keyboard-brightness"
         generatedAt = Date()
         operatingSystem = ProcessInfo.processInfo.operatingSystemVersionString
         dataOrigin = simulation ? "synthetic-development-fixtures; not hardware evidence" : nil
         mode = simulation ? "simulation-only; no device communication"
-            : settingRequested || !dpiWriteResults.isEmpty || !pollingWriteResults.isEmpty ? "manual-device-operations; see dpiWriteResults and pollingWriteResults when complete"
+            : settingRequested || !dpiWriteResults.isEmpty || !pollingWriteResults.isEmpty || !brightnessWriteResults.isEmpty ? "manual-device-operations; see dpiWriteResults, pollingWriteResults and brightnessWriteResults when complete"
             : automaticBatteryRequested ? "opt-in-battery-and-manual-reads; no setting commands"
             : queriesRequested || !mouseReadouts.isEmpty || !pollingReadouts.isEmpty || !chargingReadouts.isEmpty
                 || !keyboardBatteryReadouts.isEmpty || !keyboardChargingReadouts.isEmpty
+                || !keyboardBrightnessReadouts.isEmpty
                 || batteryReadouts.values.contains(where: { $0.backend != .macOSBluetoothBattery }) ? "manual-status-queries; no setting commands"
             : systemMetadataRequested || !systemBatteryReadings.isEmpty
                 || !batteryReadouts.isEmpty ? "system-metadata-read; no feature queries requested"
@@ -58,10 +63,13 @@ public struct DiagnosticSnapshot: Codable, Sendable {
         self.chargingReadouts = chargingReadouts.isEmpty ? nil : chargingReadouts
         self.keyboardBatteryReadouts = keyboardBatteryReadouts.isEmpty ? nil : keyboardBatteryReadouts
         self.keyboardChargingReadouts = keyboardChargingReadouts.isEmpty ? nil : keyboardChargingReadouts
+        self.keyboardBrightnessReadouts = keyboardBrightnessReadouts.isEmpty ? nil : keyboardBrightnessReadouts
+        self.brightnessWriteResults = brightnessWriteResults.isEmpty ? nil : brightnessWriteResults
         self.readSummaries = readSummaries ?? Dictionary(uniqueKeysWithValues: devices.map { device in
             (device.id, DeviceReadSummary.assess(battery: batteryReadouts[device.id], mouse: mouseReadouts[device.id], systemBattery: systemBatteryReadings[device.id],
                                                 polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
                                                 keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id],
+                                                keyboardBrightness: keyboardBrightnessReadouts[device.id],
                                                 isReading: activities[device.id]?.reading.isEmpty == false,
                                                 isSuspended: isSuspended || activities[device.id]?.isSuspended == true,
                                                 isDraining: activities[device.id]?.isDraining == true,
@@ -72,7 +80,9 @@ public struct DiagnosticSnapshot: Codable, Sendable {
             (device.id, AdapterCatalog.assess(device, battery: batteryReadouts[device.id], telemetry: mouseReadouts[device.id], systemBattery: systemBatteryReadings[device.id],
                 polling: pollingReadouts[device.id], charging: chargingReadouts[device.id],
                 keyboardBattery: keyboardBatteryReadouts[device.id], keyboardCharging: keyboardChargingReadouts[device.id],
-                activity: activities[device.id] ?? .init(isSuspended: isSuspended), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id], simulation: simulation))
+                keyboardBrightness: keyboardBrightnessReadouts[device.id],
+                activity: activities[device.id] ?? .init(isSuspended: isSuspended), dpiWrite: dpiWriteResults[device.id], pollingWrite: pollingWriteResults[device.id],
+                brightnessWrite: brightnessWriteResults[device.id], simulation: simulation))
         })
         adapterAssessments = assessments
         connectionCheck = .assess(devices: devices, assessments: assessments, isMonitoring: isMonitoring, isSuspended: isSuspended)

@@ -219,18 +219,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                            to: directory.appendingPathComponent("profiles-\(name).png"))
                         }
                     }
-                    if let keyboard = manager.physicalDevices.first(where: { $0.presentation.isKeyboard }) {
+                    if let keyboard = manager.physicalDevices.first(where: { ReclusaBrightnessReadService.canRead($0) }) {
                         let state = DeviceDetailState()
                         state.page = .controls
                         try saveRender(workspaceSnapshot(manager: manager, profiles: profiles, device: keyboard, state: state, scheme: scheme),
                                        to: directory.appendingPathComponent("lighting-\(name).png"))
-                        state.previewColorIndex = 3
-                        state.previewBrightness = 0.35
-                        try saveRender(workspaceSnapshot(manager: manager, profiles: profiles, device: keyboard, state: state, scheme: scheme),
-                                       to: directory.appendingPathComponent("lighting-purple-\(name).png"))
+
                     }
                 }
-                try Data("GUI window ready; real HID snapshot exported; shared workspace and local preview rendered in light/dark. Native window chrome and interactions require manual verification.\n".utf8)
+                try Data("GUI window ready; real HID snapshot exported; shared workspace rendered in light/dark. Native window chrome and interactions require manual verification.\n".utf8)
                     .write(to: directory.appendingPathComponent("success.txt"))
             } catch {
                 try? Data(error.localizedDescription.utf8).write(to: directory.appendingPathComponent("error.txt"))

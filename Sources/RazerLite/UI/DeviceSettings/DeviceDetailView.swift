@@ -7,13 +7,7 @@ final class DeviceDetailState: ObservableObject {
         didSet { if page != .controls { profileLoadRequest = nil } }
     }
     @Published var profileLoadRequest: DPIProfileLoadRequest?
-    @Published var previewBrightness = 0.70
-    @Published var previewColorIndex = 0
-    static let colors: [(String, Color)] = [
-        ("雷蛇绿", RazerTheme.green), ("青色", .cyan), ("蓝色", .blue),
-        ("紫色", .purple), ("粉色", .pink), ("橙色", .orange), ("白色", .white)
-    ]
-    var previewColor: Color { Self.colors[previewColorIndex].1 }
+
 }
 
 struct DeviceDetailView: View {
@@ -96,7 +90,7 @@ struct DevicePageContent: View {
     }
     private var pages: [DevicePage] {
         var result: [DevicePage] = [.overview]
-        if MouseReadService.canRead(device) { result.append(.controls) }
+        if MouseReadService.canRead(device) || ReclusaBrightnessReadService.canRead(device) { result.append(.controls) }
         if ProfileDeviceTarget(device: device) != nil { result.append(.profiles) }
         result.append(.information)
         return result
@@ -184,7 +178,12 @@ struct DevicePageContent: View {
             switch selectedPage {
             case .overview: overview
             case .controls:
-                if device.presentation.isKeyboard { LightingPreviewView(state: state) }
+                if ReclusaBrightnessReadService.canRead(device), let dpiManager {
+                    KeyboardLightingPanel(device: device, manager: dpiManager)
+                }
+                else if device.presentation.isKeyboard {
+                    Text("此型号的灯光设置尚未适配。").font(.callout).foregroundStyle(.secondary)
+                }
                 else {
                     PerformancePanel(device: device, telemetry: telemetry, polling: polling, manager: dpiManager,
                                      isReadingPolling: isReadingPolling,
@@ -280,6 +279,11 @@ struct DevicePageContent: View {
                                     detail: profiles.selectedProfile(for: device)?.name ?? "保存常用灵敏度",
                                     badge: "本地") { state.page = .profiles }
                     }
+                }
+            } else if ReclusaBrightnessReadService.canRead(device) {
+                FeatureTile(title: "灯光", icon: "sun.max", headline: "键盘亮度",
+                            detail: "读取配置，确认后调整", badge: dpiManager?.keyboardBrightnessReadouts[device.id]?.hasValue == true ? "已读取" : "未读取") {
+                    state.page = .controls
                 }
             } else if DeviceReadRegistry.backends(for: device).isEmpty && !device.isVirtual {
                 Text("已识别设备，设置功能尚未适配。")

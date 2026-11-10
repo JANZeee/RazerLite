@@ -8,7 +8,7 @@ struct AdapterAssessmentTests {
     }
 
     @Test func manifestsSeparateEvidenceImplementationAndExecutableRoutes() throws {
-        #expect(Set(AdapterManifestCatalog.all.map(\.id)).count == 3)
+        #expect(Set(AdapterManifestCatalog.all.map(\.id)).count == 4)
         for manifest in AdapterManifestCatalog.all {
             #expect(Set(manifest.features.map(\.id)).count == manifest.features.count)
             #expect(!manifest.sources.isEmpty && !manifest.firmwareScope.isEmpty)
@@ -152,7 +152,7 @@ struct AdapterAssessmentTests {
         let snapshot = DiagnosticSnapshot(interfaces: device.interfaces, activities: [device.id: .init(reading: ["charging"])])
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let result = try decoder.decode(DiagnosticSnapshot.self, from: snapshot.jsonData())
-        #expect(result.schemaVersion == 10 && result.adapterManifests == AdapterManifestCatalog.all)
+        #expect(result.schemaVersion == 11 && result.adapterManifests == AdapterManifestCatalog.all)
         #expect(result.adapterAssessments?[device.id]?.capability("charging")?.session.state == .reading)
         #expect(result.adapterAssessments?[device.id]?.capability("charging")?.evidence.level == .hardwareValidated)
         #expect(result.adapterAssessments?[device.id]?.capability("charging")?.evidence.scope.contains("充电中、状态切换和断连重连未验收") == true)
