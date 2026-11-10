@@ -154,12 +154,13 @@ public enum AdapterCatalog {
         let battery = battery.flatMap { $0.matches(device) ? $0 : nil }
         let mouseInterface = MouseReadService.interfaceID(for: device)
         let mouse = telemetry.flatMap { $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == mouseInterface ? $0 : nil }
-        let polling = polling.flatMap { $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == mouseInterface ? $0 : nil }
+        let pollingInterface = PollingRateReadService.controlInterface(in: device)?.id
+        let polling = polling.flatMap { $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == pollingInterface ? $0 : nil }
         let charging = charging.flatMap { $0.deviceID == device.id && $0.interfaceID != nil && $0.interfaceID == mouseInterface ? $0 : nil }
         let keyboardBattery = keyboardBattery.flatMap { $0.matches(device, field: .battery) ? $0 : nil }
         let keyboardCharging = keyboardCharging.flatMap { $0.matches(device, field: .charging) ? $0 : nil }
         let system = systemBattery.flatMap { $0.matches(device) ? $0 : nil }
-        let rateWrite = pollingWrite.flatMap { $0.deviceID == device.id && $0.interfaceID == mouseInterface ? $0 : nil }
+        let rateWrite = pollingWrite.flatMap { $0.deviceID == device.id && $0.interfaceID == pollingInterface ? $0 : nil }
         let write = dpiWrite.flatMap { $0.deviceID == device.id && $0.interfaceID == mouseInterface ? $0 : nil }
         let capabilities = featureTitles.map { id, title -> DeviceCapability in
             var evidence = manifest?.feature(id) ?? AdapterFeatureEvidence(id: id, implementation: .notImplemented,

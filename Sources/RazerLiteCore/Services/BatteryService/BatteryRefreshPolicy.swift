@@ -18,7 +18,7 @@ public struct BatteryRefreshTarget: Equatable, Sendable {
 /// A backend being readable is not evidence that repeated reads are safe or cheap.
 public enum BatteryRefreshEligibility {
     public static func allows(_ backend: DeviceReadBackend, simulation: Bool) -> Bool {
-        // Hardware and resource-cost acceptance is still pending for all three backends.
+        // Hardware and resource-cost acceptance is still pending for every backend, including Reclusa.
         simulation
     }
 }

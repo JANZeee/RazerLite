@@ -113,9 +113,9 @@ struct DevicePageContent: View {
                     .fixedSize(horizontal: true, vertical: false)
                 if let dpiManager, !DeviceReadRegistry.backends(for: device).isEmpty, !SystemBatteryService.canRead(device) {
                     Button { Task { await dpiManager.readBattery(for: device.id) } } label: {
-                        Label(KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量", systemImage: "battery.100")
+                        Label("读取电量", systemImage: "battery.100")
                     }
-                    .accessibilityLabel(KeyboardPowerReadService.canRead(device) ? "试读电量" : "读取电量").help("只读取电量，不查询 DPI；读数不表示持续在线")
+                    .accessibilityLabel("读取电量").help("只读取电量，不查询 DPI；读数不表示持续在线")
                     .disabled(dpiManager.isSuspended || dpiManager.isDeviceBusy(device.id))
                 }
                 if MouseReadService.canRead(device) {
@@ -179,7 +179,19 @@ struct DevicePageContent: View {
             case .overview: overview
             case .controls:
                 if ReclusaBrightnessReadService.canRead(device), let dpiManager {
-                    KeyboardLightingPanel(device: device, manager: dpiManager)
+                    VStack(alignment: .leading, spacing: 18) {
+                        KeyboardLightingPanel(device: device, manager: dpiManager)
+                        KeyboardPollingPanel(device: device, manager: dpiManager)
+                    }
+                    .task(id: "\(device.id)-\(dpiManager.isSuspended)") {
+                        guard await dpiManager.waitUntilAvailable(for: device.id) else { return }
+                        if dpiManager.keyboardBrightnessReadouts[device.id] == nil {
+                            await dpiManager.readKeyboardBrightness(for: device.id)
+                        }
+                        if !Task.isCancelled, dpiManager.pollingReadouts[device.id] == nil {
+                            await dpiManager.readPollingRate(for: device.id)
+                        }
+                    }
                 }
                 else if device.presentation.isKeyboard {
                     Text("此型号的灯光设置尚未适配。").font(.callout).foregroundStyle(.secondary)
@@ -282,7 +294,7 @@ struct DevicePageContent: View {
                 }
             } else if ReclusaBrightnessReadService.canRead(device) {
                 FeatureTile(title: "灯光", icon: "sun.max", headline: "键盘亮度",
-                            detail: "读取配置，确认后调整", badge: dpiManager?.keyboardBrightnessReadouts[device.id]?.hasValue == true ? "已读取" : "未读取") {
+                            detail: "拖动亮度条即可调整", badge: dpiManager?.keyboardBrightnessReadouts[device.id]?.hasValue == true ? "已读取" : "未读取") {
                     state.page = .controls
                 }
             } else if DeviceReadRegistry.backends(for: device).isEmpty && !device.isVirtual {

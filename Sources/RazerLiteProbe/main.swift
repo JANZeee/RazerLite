@@ -7,7 +7,7 @@ struct RazerLiteProbe {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("--help") {
-            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-battery 独立读取 Viper V4 Pro 电量，不查询 DPI、充电或修改设置。\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取 Viper V4 Pro 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 试读 1532:02D2 键盘电量，macOS 真机兼容性待验证。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--read-keyboard-brightness 试读 Reclusa Mini 65% 1532:02F5 USB 的灯区与配置槽 1 亮度；不改变灯光或配置槽。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
+            print("razerlite-probe [--all] [--watch SECONDS] [READ_OPTION] [--device-id ID]\n默认仅枚举属性；READ_OPTION 一次只选一个：\n--read-battery 独立读取 Viper V4 Pro 电量，不查询 DPI、充电或修改设置。\n--read-mouse 显式发送 Viper V4 Pro 电量与 DPI 查询，无设置命令。\n--read-polling-rate 仅读取已适配 Viper / Reclusa USB 回报率配置，不设置频率，也不是实测输入频率。\n--read-charging 独立读取 Viper V4 Pro 充电标志，不修改设置。\n--read-system-battery 按需读取一台蓝牙 Razer 设备的 macOS 电量，不发送 Feature Report。\n--read-keyboard-battery 读取 1532:02D2 / 02F5 键盘电量；具体型号验证边界见适配清单。\n--read-keyboard-charging 独立试读同一键盘的充电标志，不切换模式或设置设备。\n--read-keyboard-brightness 试读 Reclusa Mini 65% 1532:02F5 USB 的灯区与配置槽 1 亮度；不改变灯光或配置槽。\n--watch 向 stderr 输出插拔事件，结束时 stdout 输出 JSON；不能与读取选项组合。")
             return
         }
         var duration = 0.0
@@ -100,9 +100,9 @@ struct RazerLiteProbe {
                 KeyboardPowerReadService.canRead($0) && (selectedID == nil || $0.id == selectedID)
             }
             guard candidates.count == 1, let device = candidates.first else {
-                fail("未找到唯一可试读的 BlackWidow Low-profile TKL 1532:02D2；多台设备请用 --device-id 指定。")
+                fail("未找到唯一可读的键盘 1532:02D2 / 02F5；多台设备请用 --device-id 指定。")
             }
-            stderr("手动试读键盘\(field.title)；macOS 硬件兼容性待验证，不切换设备模式。")
+            stderr("按需读取键盘\(field.title)；不切换设备模式或修改设置。")
             var reading: KeyboardPowerReading?
             Task { @MainActor in
                 reading = await KeyboardPowerReadService().read(device, field: field)
@@ -163,7 +163,7 @@ struct RazerLiteProbe {
                 PollingRateReadService.canRead($0) && (selectedID == nil || $0.id == selectedID)
             }
             guard candidates.count == 1, let device = candidates.first else {
-                fail("未找到唯一可读取回报率的 Viper V4 Pro；多台设备请用 --device-id 指定。")
+                fail("未找到唯一可读取回报率的 Viper / Reclusa USB 设备；多台设备请用 --device-id 指定。")
             }
             var reading: MousePollingReading?
             Task { @MainActor in

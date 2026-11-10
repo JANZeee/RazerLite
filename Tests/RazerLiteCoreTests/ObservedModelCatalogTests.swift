@@ -14,20 +14,20 @@ struct ObservedModelCatalogTests {
               registryClass: "Fixture", observedDrivers: [], isVirtual: virtual)
     }
 
-    @Test func compositeKeyboardKeepsObservedIdentityAndUsesSeparateReviewedBrightnessRoute() throws {
+    @Test func compositeKeyboardKeepsObservedIdentityAndUsesReviewedKeyboardRoutes() throws {
         let device = DeviceInfo.group([interface(0, usage: 2), interface(1), interface(2), interface(3, usage: 1)])[0]
         #expect(device.interfaces.count == 4)
         #expect(device.kind == .keyboard)
         #expect(device.modelReference?.source == .localObservation)
         #expect(device.product == "Razer Reclusa Mini 65%")
         #expect(RazerModelCatalog.lookup(vendorID: 0x1532, productID: 0x02F5) == nil)
-        #expect(DeviceReadRegistry.backends(for: device).isEmpty)
+        #expect(DeviceReadRegistry.backends(for: device) == [.reclusaMini65USB])
         #expect(AdapterManifestCatalog.manifest(for: device)?.id == AdapterManifestCatalog.reclusaLighting.id)
         let assessment = AdapterCatalog.assess(device)
         #expect(assessment.interfaceMatched && ReclusaBrightnessReadService.canRead(device))
         #expect(assessment.sourceURL == AdapterManifestCatalog.reclusaLighting.sources.first?.url)
-        #expect(assessment.capabilities.filter(\.routeAvailable).map(\.id) == ["discovery", "brightness", "brightnessWrite"])
-        for id in ["rgb", "battery", "charging", "dpiWrite", "pollingWrite"] {
+        #expect(assessment.capabilities.filter(\.routeAvailable).map(\.id) == ["discovery", "polling", "pollingWrite", "brightness", "brightnessWrite", "battery", "charging"])
+        for id in ["rgb", "dpiWrite"] {
             #expect(assessment.capability(id)?.implementation == .notImplemented)
         }
         let snapshot = DiagnosticSnapshot(interfaces: device.interfaces)
@@ -75,14 +75,14 @@ struct ObservedModelCatalogTests {
     }
 
     #if DEBUG
-    @MainActor @Test func offlineUnreadScenarioDoesNotCreateReadingsOrBatteryRoutes() async throws {
+    @MainActor @Test func offlineUnreadScenarioDoesNotCreateReadings() async throws {
         let session = try OfflineScenarioSession()
         await session.load(.observedKeyboard)
         let device = try #require(session.manager.physicalDevices.first)
         #expect(device.interfaces.count == 4 && device.kind == .keyboard)
         #expect(session.manager.mouseReadouts.isEmpty)
         #expect(session.manager.keyboardBatteryReadouts.isEmpty && session.manager.keyboardBrightnessReadouts.isEmpty)
-        #expect(DeviceReadRegistry.backends(for: device).isEmpty)
+        #expect(DeviceReadRegistry.backends(for: device) == [.reclusaMini65USB])
         #expect(await session.services.operations.isEmpty)
     }
     #endif

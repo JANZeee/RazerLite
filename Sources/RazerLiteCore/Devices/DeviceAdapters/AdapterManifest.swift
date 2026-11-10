@@ -131,10 +131,10 @@ public enum AdapterManifestCatalog {
         ])
 
     public static let reclusaLighting = DeviceAdapterManifest(
-        id: "reclusa-mini65-usb-lighting", name: "Reclusa Mini 65% · USB 亮度", deviceKind: .keyboard,
+        id: "reclusa-mini65-usb-lighting", name: "Reclusa Mini 65% · USB 接收器", deviceKind: .keyboard,
         vendorIDs: [0x1532], productIDs: [0x02F5], transports: ["USB"], transportPrefix: nil,
         fingerprint: .init(interfaceNumber: 3, usagePage: 0x0C, usage: 1, inputBytes: 0, outputBytes: 0, featureBytes: 90),
-        firmwareScope: "本机固件未查询；2026-11-10 的 02F5 读回只证明指定接口的 profile 1 亮度查询，写入和跨重启持久性尚待真机验收。",
+        firmwareScope: "本机固件未查询；02F5 的亮度读回及用户观察已验证。电源与回报率分别记录验证状态；其他连接、固件及跨重启持久性不继承。",
         sources: [
             .init(url: URL(string: "https://apps.razer.com/synapse/products/756/mw/main.4ac4b05541bb1859fa0e.js")!,
                   revision: "sha256:5e7adbd276b0da6a4a4f06c6dbc7d7b07400b3fd7fd17eb8eea54a7948b4923d", scope: "756/757/758 精确身份与 interface 3"),
@@ -146,7 +146,11 @@ public enum AdapterManifestCatalog {
                   revision: "sha256:a8486d90275407cfc1c9e7b21b2017cc74a5720a5c7b6aa330c51bb3cd8d46db", scope: "连接工厂和 profile 1 亮度目标；不执行模式切换或板载同步")
         ], features: [
             feature("brightness", .hardwareValidated, "本机 02F5 在 2026-11-10T14:01:59Z 返回 region 5 / profile 1 / raw 255；只代表读取时的配置。", ["docs/KEYBOARD_LIGHTING.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaBrightnessTests.swift"]),
-            feature("brightnessWrite", .simulationTested, "明确确认后单次设置 profile 1 并读回；写入未真机验收，不改模式或同步其他板载槽。", ["docs/KEYBOARD_LIGHTING.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaBrightnessControlTests.swift", "Tests/RazerLiteCoreTests/KeyboardBrightnessLifecycleTests.swift"])
+            feature("brightnessWrite", .hardwareValidated, "本机 100%→50% 读回 raw127；用户确认实际灯光变化。实时滑块另经模拟测试，0%及断电保存待验收。", ["docs/KEYBOARD_LIGHTING.md", "docs/PHASE013_KEYBOARD_BASICS.md"], samples: ["Tests/RazerLiteCoreTests/LiveBrightnessTests.swift", "Tests/RazerLiteCoreTests/ManagerLiveBrightnessTests.swift"]),
+            feature("battery", .hardwareValidated, "2026-11-10T14:53:52Z 本机02F5查询返回15%；只证明当时设备读数，不证明电量精度或其他固件。", ["docs/PHASE013_KEYBOARD_BASICS.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaPowerTests.swift"]),
+            feature("charging", .hardwareValidated, "2026-11-10T14:53:52Z 本机02F5返回未充电；充电中与状态切换尚待验收，其他码保留未知。", ["docs/PHASE013_KEYBOARD_BASICS.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaPowerTests.swift"]),
+            feature("polling", .hardwareValidated, "2026-11-10T14:53:52Z 本机02F5的profile1回报率配置返回1000Hz；不是实际输入频率测量，其他档位待验收。", ["docs/PHASE013_KEYBOARD_BASICS.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaPollingTests.swift"]),
+            feature("pollingWrite", .simulationTested, "明确确认后只修改profile1，单次00:40并读回；仅开放125/250/500/1000Hz，高档共享条件未适配。", ["docs/PHASE013_KEYBOARD_BASICS.md"], samples: ["Tests/RazerLiteCoreTests/ReclusaPollingTests.swift"])
         ])
 
     public static let bluetooth = DeviceAdapterManifest(

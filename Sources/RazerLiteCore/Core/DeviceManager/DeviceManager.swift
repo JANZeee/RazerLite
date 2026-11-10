@@ -47,6 +47,9 @@ public final class DeviceManager: ObservableObject {
     @Published public private(set) var brightnessWriteBusyIDs: Set<String> = []
     @Published public private(set) var brightnessWriteErrors: [String: String] = [:]
     @Published public private(set) var brightnessWriteResults: [String: KeyboardBrightnessWriteResult] = [:]
+    @Published public private(set) var liveBrightnessTargets: [String: Int] = [:]
+    private let liveBrightnessService: any KeyboardBrightnessLiveControlling
+    private var liveBrightnessControllers: [String: (generation: UUID, controller: LiveBrightnessController)] = [:]
     private let brightnessReader: any KeyboardBrightnessReadingService
     private let brightnessController: any KeyboardBrightnessControlling
     private var activeBrightnessPlans: [String: KeyboardBrightnessPlan] = [:]
@@ -66,6 +69,12 @@ public final class DeviceManager: ObservableObject {
     private let logger = Logger(subsystem: "local.RazerLite", category: "Discovery")
     private var interfaces: [HIDInterface] = []
     private let operations = DeviceOperationCoordinator()
+    private struct AvailabilityWaiter {
+        let deviceID: String
+        let generation: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+    private var availabilityWaiters: [UUID: AvailabilityWaiter] = [:]
     @Published public private(set) var drainingOperationIDs: Set<String> = []
     private var cancelledReadFields: [String: Set<String>] = [:]
     @Published public private(set) var lastSuccessfulReadings: [String: [String: CapabilitySample]] = [:]
@@ -92,6 +101,7 @@ public final class DeviceManager: ObservableObject {
                 pollingController: any PollingRateControlling = PollingRateControlService(),
                 brightnessReader: any KeyboardBrightnessReadingService = ReclusaBrightnessReadService(),
                 brightnessController: any KeyboardBrightnessControlling = ReclusaBrightnessControlService(),
+                liveBrightnessService: any KeyboardBrightnessLiveControlling = ReclusaLiveBrightnessService(),
                 chargingReader: any MouseChargingReadingService = ChargingReadService(),
                 keyboardPowerReader: any KeyboardPowerReadingService = KeyboardPowerReadService(),
                 batteryReader: any BatteryReadingService = ViperBatteryReadService(), isSimulation: Bool = false) {
@@ -99,7 +109,7 @@ public final class DeviceManager: ObservableObject {
             precondition(!(discovery is HIDDiscovery) && !(mouseReader is MouseReadService)
                 && !(dpiController is MouseDPIService) && !(systemBatteryReader is SystemBatteryService)
                 && !(pollingController is PollingRateControlService) && !(pollingReader is PollingRateReadService) && !(chargingReader is ChargingReadService)
-                && !(brightnessReader is ReclusaBrightnessReadService) && !(brightnessController is ReclusaBrightnessControlService)
+                && !(brightnessReader is ReclusaBrightnessReadService) && !(brightnessController is ReclusaBrightnessControlService) && !(liveBrightnessService is ReclusaLiveBrightnessService)
                 && !(keyboardPowerReader is KeyboardPowerReadService) && !(batteryReader is ViperBatteryReadService), "模拟模式必须替换全部真实设备服务")
         }
         self.isSimulation = isSimulation
@@ -108,6 +118,7 @@ public final class DeviceManager: ObservableObject {
         self.mouseReader = mouseReader
         self.dpiController = dpiController
         self.systemBatteryReader = systemBatteryReader
+        self.liveBrightnessService = liveBrightnessService
         self.brightnessReader = brightnessReader
         self.brightnessController = brightnessController
         self.pollingReader = pollingReader
@@ -132,7 +143,7 @@ public final class DeviceManager: ObservableObject {
         discovery.start()
         let duration = start.duration(to: .now).components
         discoveryReadyMilliseconds = Double(duration.seconds) * 1000 + Double(duration.attoseconds) / 1e15
-        record("发现服务就绪（\(String(format: "%.2f", discoveryReadyMilliseconds ?? 0)) ms）；枚举仅读取系统属性，状态查询需手动触发。")
+        record("发现服务就绪（\(String(format: "%.2f", discoveryReadyMilliseconds ?? 0)) ms）；枚举仅读取系统属性，设备状态按页面或操作按需读取，无常驻轮询。")
     }
 
     public func refresh() { if !isSuspended { discovery.refresh() } }
@@ -209,7 +220,7 @@ public final class DeviceManager: ObservableObject {
 
     public func readPollingRate(for deviceID: String) async {
         guard let device = devices.first(where: { $0.id == deviceID }),
-              let interface = ViperV4Adapter.controlInterface(in: device),
+              let interface = PollingRateReadService.controlInterface(in: device),
               let ticket = beginRead(.polling, for: deviceID) else { return }
         defer { finishOperation(ticket) }
         pollingReadouts.removeValue(forKey: deviceID)
@@ -219,7 +230,7 @@ public final class DeviceManager: ObservableObject {
         let result = await performRead(ticket) { await self.pollingReader.read(device) }
         guard !Task.isCancelled, operations.isCurrent(ticket) else { return }
         guard let current = devices.first(where: { $0.id == deviceID }),
-              let currentInterface = ViperV4Adapter.controlInterface(in: current),
+              let currentInterface = PollingRateReadService.controlInterface(in: current),
               ViperV4Adapter.isSameInterface(currentInterface, expected: interface),
               result.deviceID == deviceID, result.interfaceID == interface.id else { return }
         pollingReadouts[deviceID] = result
@@ -289,7 +300,7 @@ public final class DeviceManager: ObservableObject {
 
     public func readKeyboardPower(for deviceID: String, field: KeyboardPowerField) async {
         guard let device = devices.first(where: { $0.id == deviceID }),
-              let interface = BlackWidowLowProfileAdapter.controlInterface(in: device),
+              let interface = KeyboardPowerReadService.controlInterface(in: device),
               let ticket = beginRead(field == .battery ? .keyboardBattery : .keyboardCharging, for: deviceID) else { return }
         defer { finishOperation(ticket) }
         if field == .battery { batteryReadouts.removeValue(forKey: deviceID) }
@@ -300,7 +311,7 @@ public final class DeviceManager: ObservableObject {
         let result = await performRead(ticket) { await self.keyboardPowerReader.read(device, field: field) }
         guard !Task.isCancelled, operations.isCurrent(ticket) else { return }
         guard let current = devices.first(where: { $0.id == deviceID }),
-              let currentInterface = BlackWidowLowProfileAdapter.controlInterface(in: current),
+              let currentInterface = KeyboardPowerReadService.controlInterface(in: current),
               currentInterface.matchesSession(interface), result.matches(current, field: field) else { return }
         keyboardReadingInterfaces[deviceID] = currentInterface
         if field == .battery {
@@ -410,7 +421,7 @@ public final class DeviceManager: ObservableObject {
         guard isMonitoring, isSuspended else { return }
         isSuspended = false
         discovery.refresh()
-        record("系统已唤醒：重新枚举设备；电量与 DPI 等候手动刷新。")
+        record("系统已唤醒：重新枚举设备；打开的设备页面按需刷新，其余状态等待操作。")
     }
 
     public func prepareDPIChange(for deviceID: String, x: Int, y: Int) async {
@@ -485,6 +496,7 @@ public final class DeviceManager: ObservableObject {
             dpiBusyIDs.remove(deviceID)
             syncOperationActivity()
         }
+        resumeAvailabilityWaiters()
     }
 
     /// Called only by the confirmation sheet's explicit write button, with the displayed plan ID.
@@ -544,6 +556,7 @@ public final class DeviceManager: ObservableObject {
 
     /// Revokes every pending or not-yet-submitted setting when the window closes or a session ends.
     public func invalidateControlPlans() {
+        for id in liveBrightnessControllers.keys { cancelLiveBrightness(for: id) }
         invalidateDPIPlans()
         for plan in pendingPollingChanges.values { plan.invalidate() }
         for plan in activePollingPlans.values { plan.invalidate() }
@@ -561,7 +574,7 @@ public final class DeviceManager: ObservableObject {
     public func preparePollingChange(for deviceID: String, hertz: Int) async {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !isDeviceBusy(deviceID),
               let device = devices.first(where: { $0.id == deviceID }),
-              let interface = ViperV4Adapter.controlInterface(in: device),
+              let interface = PollingRateReadService.controlInterface(in: device),
               let ticket = operations.begin(.pollingPrepare, for: deviceID) else { return }
         defer { finishOperation(ticket) }
         syncOperationActivity()
@@ -596,6 +609,7 @@ public final class DeviceManager: ObservableObject {
             operations.cancelActive(for: deviceID)
             syncOperationActivity()
         }
+        resumeAvailabilityWaiters()
     }
 
     public func confirmPollingChange(for deviceID: String, planID: UUID) async {
@@ -617,6 +631,9 @@ public final class DeviceManager: ObservableObject {
         mouseReadingInterfaces.removeValue(forKey: deviceID)
         chargingReadouts.removeValue(forKey: deviceID)
         chargingReadingInterfaces.removeValue(forKey: deviceID)
+        keyboardBatteryReadouts.removeValue(forKey: deviceID)
+        keyboardChargingReadouts.removeValue(forKey: deviceID)
+        keyboardReadingInterfaces.removeValue(forKey: deviceID)
         hasConfirmedDeviceWrite = true
         record("用户确认 \(plan.deviceName) 回报率 \(plan.before) → \(plan.after) Hz；单次提交并读回。")
         let result = await withTaskCancellationHandler {
@@ -636,6 +653,89 @@ public final class DeviceManager: ObservableObject {
             if let device = devices.first(where: { $0.id == deviceID }) { rememberSuccessfulReadings(for: device, fields: ["polling"]) }
         }
         record(result.message, isError: result.outcome != .verified, presentError: false)
+    }
+
+    public func canAdjustLiveBrightness(for deviceID: String) -> Bool {
+        guard isMonitoring, !isSuspended, !drainingOperationIDs.contains(deviceID),
+              pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil,
+              pendingBrightnessChanges[deviceID] == nil else { return false }
+        if operations.isBusy(deviceID) {
+            return operations.activeOperation(for: deviceID) == .brightnessApply
+                && liveBrightnessControllers[deviceID]?.controller.target != nil
+        }
+        return true
+    }
+
+    /// Only explicit slider/button edits enter this path. Discovery and reads never submit a value.
+    public func setKeyboardBrightness(for deviceID: String, percent: Int) {
+        guard (0...100).contains(percent), canAdjustLiveBrightness(for: deviceID),
+              let device = devices.first(where: { $0.id == deviceID }),
+              let interface = ReclusaLightingAdapter.controlInterface(in: device),
+              let generation = operations.generation(for: deviceID) else { return }
+        if liveBrightnessControllers[deviceID]?.generation != generation {
+            guard liveBrightnessControllers[deviceID]?.controller.hasWork != true else { return }
+            let controller = LiveBrightnessController(onStateChange: { [weak self] in
+                guard let self else { return }
+                self.liveBrightnessTargets[deviceID] = self.liveBrightnessControllers[deviceID]?.controller.target
+                self.resumeAvailabilityWaiters()
+            }, apply: { [weak self] percent, permit in
+                guard let self else { return false }
+                return await self.applyLiveBrightness(deviceID: deviceID, interface: interface,
+                    generation: generation, percent: percent, permit: permit)
+            })
+            liveBrightnessControllers[deviceID] = (generation, controller)
+        }
+        brightnessWriteErrors.removeValue(forKey: deviceID)
+        _ = liveBrightnessControllers[deviceID]?.controller.submit(percent: percent)
+    }
+
+    public func cancelLiveBrightness(for deviceID: String) {
+        liveBrightnessControllers[deviceID]?.controller.cancel()
+        if operations.activeOperation(for: deviceID) == .brightnessApply,
+           activeBrightnessPlans[deviceID] == nil {
+            operations.cancelActive(for: deviceID)
+            syncOperationActivity()
+        }
+    }
+
+    private func applyLiveBrightness(deviceID: String, interface: HIDInterface, generation: UUID,
+                                     percent: Int, permit: LiveBrightnessPermit) async -> Bool {
+        guard isMonitoring, !isSuspended, !Task.isCancelled, permit.isUsable,
+              operations.generation(for: deviceID) == generation,
+              let device = devices.first(where: { $0.id == deviceID }),
+              ReclusaLightingAdapter.controlInterface(in: device)?.matchesSession(interface) == true,
+              let ticket = operations.begin(.brightnessApply, for: deviceID) else { return false }
+        defer { finishOperation(ticket) }
+        syncOperationActivity()
+        keyboardBrightnessReadouts.removeValue(forKey: deviceID)
+        brightnessReadingInterfaces.removeValue(forKey: deviceID)
+        brightnessWriteResults.removeValue(forKey: deviceID)
+        brightnessResultInterfaces.removeValue(forKey: deviceID)
+        hasRequestedQueries = true
+        hasConfirmedDeviceWrite = true
+        let result = await withTaskCancellationHandler {
+            await liveBrightnessService.set(device, percent: percent, permit: permit)
+        } onCancel: { permit.invalidate() }
+        guard !Task.isCancelled, isMonitoring, operations.isCurrent(ticket) else { return false }
+        guard result.deviceID == deviceID, result.interfaceID == interface.id else {
+            brightnessWriteErrors[deviceID] = "亮度响应与当前设备不匹配，请重新读取。"
+            return false
+        }
+        if result.outcome == .verified {
+            guard let reading = result.readback, reading.hasValue, reading.deviceID == deviceID,
+                  reading.interfaceID == interface.id, reading.profileID == 1,
+                  reading.rawBrightness == (try? ReclusaBrightnessProtocol.raw(forPercent: percent)) else {
+                brightnessWriteErrors[deviceID] = "亮度读回与目标不一致，请重新读取。"
+                return false
+            }
+            keyboardBrightnessReadouts[deviceID] = reading
+            brightnessReadingInterfaces[deviceID] = interface
+            rememberSuccessfulReadings(for: device, fields: ["brightness"])
+        }
+        brightnessWriteResults[deviceID] = result
+        brightnessResultInterfaces[deviceID] = interface
+        record(result.message, isError: result.outcome != .verified, presentError: false)
+        return result.outcome == .verified
     }
 
     public func prepareBrightnessChange(for deviceID: String, percent: Int) async {
@@ -677,6 +777,7 @@ public final class DeviceManager: ObservableObject {
             operations.cancelActive(for: deviceID)
             syncOperationActivity()
         }
+        resumeAvailabilityWaiters()
     }
 
     public func confirmBrightnessChange(for deviceID: String, planID: UUID) async {
@@ -739,6 +840,8 @@ public final class DeviceManager: ObservableObject {
 
     private func invalidateDisconnectedReads() {
         let changed = operations.reconcile(isSuspended ? [] : devices)
+        for id in changed { cancelLiveBrightness(for: id) }
+        liveBrightnessControllers = liveBrightnessControllers.filter { !changed.contains($0.key) || $0.value.controller.hasWork }
         for id in changed { lastSuccessfulReadings.removeValue(forKey: id); cancelledReadFields.removeValue(forKey: id); batteryReadouts.removeValue(forKey: id) }
         syncOperationActivity()
         let connected = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
@@ -763,7 +866,7 @@ public final class DeviceManager: ObservableObject {
         }
         brightnessResultInterfaces = brightnessResultInterfaces.filter { brightnessWriteResults[$0.key] != nil }
         let keyboard = Dictionary(uniqueKeysWithValues: devices.compactMap { device in
-            BlackWidowLowProfileAdapter.controlInterface(in: device).map { (device.id, $0) }
+            KeyboardPowerReadService.controlInterface(in: device).map { (device.id, $0) }
         })
         keyboardBatteryReadouts = keyboardBatteryReadouts.filter { id, result in
             guard let current = keyboard[id], let expected = keyboardReadingInterfaces[id] else { return false }
@@ -786,8 +889,11 @@ public final class DeviceManager: ObservableObject {
             return value.interfaceID == current.id && ViperV4Adapter.isSameInterface(current, expected: expected)
         }
         mouseReadingInterfaces = mouseReadingInterfaces.filter { mouseReadouts[$0.key] != nil }
+        let pollingRoutes = Dictionary(uniqueKeysWithValues: devices.compactMap { device in
+            PollingRateReadService.controlInterface(in: device).map { (device.id, $0) }
+        })
         pollingReadouts = pollingReadouts.filter { id, value in
-            guard let current = current[id], let expected = pollingReadingInterfaces[id] else { return false }
+            guard let current = pollingRoutes[id], let expected = pollingReadingInterfaces[id] else { return false }
             return value.interfaceID == current.id && ViperV4Adapter.isSameInterface(current, expected: expected)
         }
         pollingReadingInterfaces = pollingReadingInterfaces.filter { pollingReadouts[$0.key] != nil }
@@ -803,15 +909,15 @@ public final class DeviceManager: ObservableObject {
             activeDPIPlans.removeValue(forKey: id)?.invalidate()
             dpiRequests.removeValue(forKey: id)
         }
-        for (id, plan) in pendingPollingChanges where current[id]?.matchesSession(plan.interface) != true {
+        for (id, plan) in pendingPollingChanges where pollingRoutes[id]?.matchesSession(plan.interface) != true {
             cancelPollingChange(for: id)
         }
-        for (id, plan) in activePollingPlans where current[id]?.matchesSession(plan.interface) != true {
+        for (id, plan) in activePollingPlans where pollingRoutes[id]?.matchesSession(plan.interface) != true {
             activePollingPlans.removeValue(forKey: id)?.invalidate()
         }
-        pollingWriteErrors = pollingWriteErrors.filter { current[$0.key] != nil }
+        pollingWriteErrors = pollingWriteErrors.filter { pollingRoutes[$0.key] != nil }
         pollingWriteResults = pollingWriteResults.filter { id, result in
-            guard let current = current[id], let expected = pollingResultInterfaces[id] else { return false }
+            guard let current = pollingRoutes[id], let expected = pollingResultInterfaces[id] else { return false }
             return result.interfaceID == current.id && current.matchesSession(expected)
         }
         pollingResultInterfaces = pollingResultInterfaces.filter { pollingWriteResults[$0.key] != nil }
@@ -833,7 +939,41 @@ public final class DeviceManager: ObservableObject {
     }
 
     public func isDeviceBusy(_ id: String) -> Bool {
-        operations.isBusy(id) || pendingDPIChanges[id] != nil || pendingPollingChanges[id] != nil || pendingBrightnessChanges[id] != nil
+        liveBrightnessControllers[id]?.controller.hasWork == true || operations.isBusy(id) || pendingDPIChanges[id] != nil || pendingPollingChanges[id] != nil || pendingBrightnessChanges[id] != nil
+    }
+
+    /// Waits for the current session's existing work without polling or issuing a query.
+    /// Callers still use the ordinary read methods, which recheck availability before I/O.
+    public func waitUntilAvailable(for deviceID: String) async -> Bool {
+        let id = UUID()
+        let available = await withTaskCancellationHandler {
+            guard !Task.isCancelled, isMonitoring, !isSuspended,
+                  let generation = operations.generation(for: deviceID) else { return false }
+            guard isDeviceBusy(deviceID) else { return true }
+            return await withCheckedContinuation { continuation in
+                // Cancellation may precede registration; its queued MainActor handler
+                // cannot be relied on to find the continuation in that case.
+                guard !Task.isCancelled else { continuation.resume(returning: false); return }
+                availabilityWaiters[id] = .init(deviceID: deviceID, generation: generation,
+                                                continuation: continuation)
+                resumeAvailabilityWaiters()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.availabilityWaiters.removeValue(forKey: id)?.continuation.resume(returning: false)
+            }
+        }
+        return available && !Task.isCancelled
+    }
+
+    private func resumeAvailabilityWaiters() {
+        for (id, waiter) in availabilityWaiters {
+            let valid = isMonitoring && !isSuspended
+                && operations.generation(for: waiter.deviceID) == waiter.generation
+            guard !valid || !isDeviceBusy(waiter.deviceID) else { continue }
+            // Remove before resuming so cancellation and later notifications are idempotent.
+            availabilityWaiters.removeValue(forKey: id)?.continuation.resume(returning: valid)
+        }
     }
 
     public func batterySummary(for device: DeviceInfo) -> MenuBatterySummary? {
@@ -870,7 +1010,7 @@ public final class DeviceManager: ObservableObject {
         let result: BatteryReading = await performRead(ticket) {
             switch target.backend {
             case .viperV4USB: return await self.batteryReader.read(device)
-            case .blackWidowLowProfileUSB:
+            case .blackWidowLowProfileUSB, .reclusaMini65USB:
                 let value = await self.keyboardPowerReader.read(device, field: .battery)
                 return .init(deviceID: value.deviceID, interfaceIDs: device.interfaces.map(\.id).sorted(), backend: target.backend,
                     percent: value.matches(device, field: .battery) ? value.batteryPercent : nil, acquiredAt: value.readAt, source: .device,
@@ -914,6 +1054,7 @@ public final class DeviceManager: ObservableObject {
 
     private func beginRead(_ operation: DeviceOperation, for deviceID: String) -> DeviceOperationTicket? {
         guard isMonitoring, !isSuspended, !Task.isCancelled, !dpiBusyIDs.contains(deviceID),
+              liveBrightnessControllers[deviceID]?.controller.hasWork != true,
               pendingDPIChanges[deviceID] == nil, pendingPollingChanges[deviceID] == nil, pendingBrightnessChanges[deviceID] == nil,
               let ticket = operations.begin(operation, for: deviceID) else { return nil }
         cancelledReadFields[deviceID]?.subtract(operation.fields)
@@ -956,6 +1097,7 @@ public final class DeviceManager: ObservableObject {
         readingKeyboardPowerIDs = ids(.keyboardBattery).union(ids(.keyboardCharging))
         readingSystemBatteryIDs = ids(.systemBattery)
         drainingOperationIDs = Set(devices.filter { operations.isDraining($0.id) }.map(\.id))
+        resumeAvailabilityWaiters()
     }
 
     private func rememberSuccessfulReadings(for device: DeviceInfo, fields: Set<String>) {

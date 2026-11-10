@@ -16,24 +16,37 @@ public protocol MousePollingReadingService: Sendable {
 /// Separate opt-in operation: does not depend on battery/DPI and never sends a rate-setting command.
 public final class PollingRateReadService: MousePollingReadingService, Sendable {
     private let transportFactory: @Sendable (HIDInterface) throws -> any HIDFeatureTransport
-    public init() { transportFactory = { try NativeHIDFeatureTransport(interface: $0) } }
+    private let wait: @Sendable () -> Void
+    public init() {
+        transportFactory = { try NativeHIDFeatureTransport(interface: $0) }
+        wait = { Thread.sleep(forTimeInterval: 0.035) }
+    }
     init(transportFactory: @escaping @Sendable (HIDInterface) throws -> any HIDFeatureTransport) {
         self.transportFactory = transportFactory
+        wait = { Thread.sleep(forTimeInterval: 0.035) }
     }
-    public static func canRead(_ device: DeviceInfo) -> Bool { MouseReadService.canRead(device) }
+    init(transportFactory: @escaping @Sendable (HIDInterface) throws -> any HIDFeatureTransport,
+         wait: @escaping @Sendable () -> Void) {
+        self.transportFactory = transportFactory
+        self.wait = wait
+    }
+    public static func controlInterface(in device: DeviceInfo) -> HIDInterface? {
+        PollingRateRoute.resolve(device)?.interface
+    }
+    public static func canRead(_ device: DeviceInfo) -> Bool { controlInterface(in: device) != nil }
 
     public func read(_ device: DeviceInfo) async -> MousePollingReading {
         await withCheckedContinuation { continuation in
             HIDOperationExecutor.queue.async {
-                let interface = ViperV4Adapter.controlInterface(in: device)
+                let selection = PollingRateRoute.resolve(device)
+                let interface = selection?.interface
                 var hertz: Int?
                 var issue: MouseReadIssue?
                 do {
-                    guard let interface else { throw MouseQueryError.unavailableInterface }
-                    let transport = try self.transportFactory(interface)
+                    guard let selection else { throw MouseQueryError.unavailableInterface }
+                    let transport = try self.transportFactory(selection.interface)
                     defer { transport.close() }
-                    let client = ViperV4ControlClient(transport: transport)
-                    hertz = try ViperV4ReadProtocol.pollingRate(client.query(.pollingRate))
+                    hertz = try selection.route.read(transport, wait: self.wait)
                 } catch {
                     issue = MouseReadIssue(field: "pollingRate", message: error.localizedDescription,
                                            kind: ReadFailureClassifier.classify(error))

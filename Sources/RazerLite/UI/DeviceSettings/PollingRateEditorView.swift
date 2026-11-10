@@ -3,7 +3,7 @@ import RazerLiteCore
 
 @MainActor
 private final class PollingRateEditorState: ObservableObject {
-    @Published var hertz = 1000
+    @Published var hertz: Int?
 }
 
 struct PollingRateEditorView: View {
@@ -15,18 +15,20 @@ struct PollingRateEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
-            HStack {
-                Picker("目标回报率", selection: $editor.hertz) {
-                    ForEach(PollingRateControlService.supportedRates, id: \.self) { hertz in
-                        Text("\(hertz) Hz").tag(hertz)
-                    }
-                }.frame(maxWidth: 260).disabled(busy)
-                Spacer()
-                Button(manager.pollingWriteBusyIDs.contains(device.id) ? "正在处理…" : "检查回报率变更…") {
-                    Task { await manager.preparePollingChange(for: device.id, hertz: editor.hertz) }
-                }.disabled(busy || manager.pollingReadouts[device.id]?.configuredHertz == editor.hertz)
-            }
-            Text("试验性设置 · 确认后应用，可能短暂中断无线连接。")
+            Picker("回报率", selection: Binding(get: { editor.hertz }, set: { hertz in
+                editor.hertz = hertz
+                guard let hertz else { return }
+                Task { await manager.preparePollingChange(for: device.id, hertz: hertz) }
+            })) {
+                Text("选择回报率").tag(Int?.none)
+                ForEach(PollingRateControlService.supportedRates(for: device), id: \.self) { hertz in
+                    Text("\(hertz) Hz").tag(Optional(hertz))
+                }
+                if let hertz = editor.hertz, !PollingRateControlService.supportedRates(for: device).contains(hertz) {
+                    Text("\(hertz) Hz · 当前").tag(Optional(hertz))
+                }
+            }.frame(maxWidth: 280).disabled(busy)
+            Text("选择后确认应用，可能短暂中断无线连接。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
             if let error = manager.pollingWriteErrors[device.id] {
                 Text(error).font(.system(size: 11)).foregroundStyle(.red)
@@ -67,6 +69,15 @@ struct PollingRateEditorView: View {
         }
         .onAppear {
             if let current = manager.pollingReadouts[device.id]?.configuredHertz { editor.hertz = current }
+        }
+        .onChange(of: manager.pollingReadouts[device.id]?.configuredHertz) { value in
+            if manager.pendingPollingChanges[device.id] == nil { editor.hertz = value }
+        }
+        .onChange(of: manager.pendingPollingChanges[device.id]?.id) { value in
+            if value == nil, let current = manager.pollingReadouts[device.id]?.configuredHertz { editor.hertz = current }
+        }
+        .onChange(of: manager.pollingWriteErrors[device.id]) { value in
+            if value != nil { editor.hertz = nil }
         }
         .onDisappear { manager.cancelPollingChange(for: device.id) }
     }

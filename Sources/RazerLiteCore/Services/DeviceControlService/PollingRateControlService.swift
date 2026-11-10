@@ -9,9 +9,21 @@ public struct PollingRatePlan: Identifiable, Sendable {
     public let createdAt = Date()
     let interface: HIDInterface
     let issuedAt: ContinuousClock.Instant
+    let route: PollingRateRoute
     let permit = DeviceWritePermit()
     var isUsable: Bool { permit.isUsable && issuedAt.duration(to: .now) < .seconds(60) }
     func invalidate() { permit.invalidate() }
+
+    init(deviceID: String, deviceName: String, before: Int, after: Int, interface: HIDInterface,
+         issuedAt: ContinuousClock.Instant, route: PollingRateRoute = .viperV4) {
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.before = before
+        self.after = after
+        self.interface = interface
+        self.issuedAt = issuedAt
+        self.route = route
+    }
 }
 
 public enum PollingWriteOutcome: String, Codable, Sendable { case verified, notSent, uncertain }
@@ -35,21 +47,42 @@ public protocol PollingRateControlling: Sendable {
 public final class PollingRateControlService: PollingRateControlling, Sendable {
     public static let supportedRates = ViperV4PollingWriteProtocol.rates
     private let factory: @Sendable (HIDInterface) throws -> any HIDFeatureTransport
-    public init() { factory = { try NativeHIDFeatureTransport(interface: $0) } }
-    init(factory: @escaping @Sendable (HIDInterface) throws -> any HIDFeatureTransport) { self.factory = factory }
+    private let wait: @Sendable () -> Void
+    public init() {
+        factory = { try NativeHIDFeatureTransport(interface: $0) }
+        wait = { Thread.sleep(forTimeInterval: 0.035) }
+    }
+    init(factory: @escaping @Sendable (HIDInterface) throws -> any HIDFeatureTransport) {
+        self.factory = factory
+        wait = { Thread.sleep(forTimeInterval: 0.035) }
+    }
+    init(factory: @escaping @Sendable (HIDInterface) throws -> any HIDFeatureTransport,
+         wait: @escaping @Sendable () -> Void) {
+        self.factory = factory
+        self.wait = wait
+    }
+
+    public static func controlInterface(in device: DeviceInfo) -> HIDInterface? {
+        PollingRateRoute.resolve(device)?.interface
+    }
+    public static func canControl(_ device: DeviceInfo) -> Bool { controlInterface(in: device) != nil }
+    public static func supportedRates(for device: DeviceInfo) -> [Int] {
+        PollingRateRoute.resolve(device)?.route.supportedRates ?? []
+    }
 
     public func prepare(_ device: DeviceInfo, hertz: Int) async throws -> PollingRatePlan {
-        _ = try ViperV4PollingWriteProtocol.code(for: hertz)
+        guard let selection = PollingRateRoute.resolve(device) else { throw MouseQueryError.unavailableInterface }
+        try selection.route.validateTarget(hertz)
         return try await withCheckedThrowingContinuation { continuation in
             HIDOperationExecutor.queue.async {
                 do {
-                    guard let interface = ViperV4Adapter.controlInterface(in: device) else { throw MouseQueryError.unavailableInterface }
+                    let interface = selection.interface
                     let transport = try self.factory(interface)
                     defer { transport.close() }
-                    let before = try ViperV4ReadProtocol.pollingRate(ViperV4ControlClient(transport: transport).query(.pollingRate))
+                    let before = try selection.route.read(transport, wait: self.wait)
                     guard before != hertz else { throw MouseQueryError.malformed("目标回报率与设备相同，无需写入") }
                     continuation.resume(returning: PollingRatePlan(deviceID: device.id, deviceName: device.product,
-                        before: before, after: hertz, interface: interface, issuedAt: .now))
+                        before: before, after: hertz, interface: interface, issuedAt: .now, route: selection.route))
                 } catch { continuation.resume(throwing: error) }
             }
         }
@@ -66,15 +99,15 @@ public final class PollingRateControlService: PollingRateControlling, Sendable {
         var readback: Int?
         do {
             guard plan.isUsable else { throw MouseQueryError.malformed("确认已失效，请重新检查变更") }
+            try plan.route.validateTarget(plan.after)
             let transport = try factory(plan.interface)
             defer { transport.close() }
-            let client = ViperV4ControlClient(transport: transport)
-            let current = try ViperV4ReadProtocol.pollingRate(client.query(.pollingRate))
+            let current = try plan.route.read(transport, wait: wait)
             guard current == plan.before else { throw MouseQueryError.malformed("设备回报率已变化，已中止；请重新检查") }
             guard plan.isUsable, plan.permit.consume() else { throw MouseQueryError.malformed("确认已取消、过期或使用") }
             attempted = true
-            try client.setPollingRate(plan.after)
-            readback = try ViperV4ReadProtocol.pollingRate(client.query(.pollingRate))
+            try plan.route.set(plan.after, transport: transport, wait: wait)
+            readback = try plan.route.read(transport, transaction: 0x82, wait: wait)
             guard readback == plan.after else { throw MouseQueryError.malformed("设备读回 \(readback ?? 0) Hz，与目标 \(plan.after) Hz 不一致") }
             return .init(deviceID: plan.deviceID, interfaceID: plan.interface.id, completedAt: Date(), outcome: .verified,
                 attemptedWrite: true, readback: readback, message: "已读回 \(plan.after) Hz 配置；不是实际输入频率测量。")

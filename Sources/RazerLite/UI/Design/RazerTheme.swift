@@ -44,7 +44,7 @@ enum DevicePage: String, CaseIterable {
     func title(for device: DeviceInfo) -> String {
         switch self {
         case .overview: "总览"
-        case .controls: device.presentation.isKeyboard ? "灯光" : "性能"
+        case .controls: device.presentation.isKeyboard ? "设置" : "性能"
         case .buttons: "按键"
         case .profiles: "档案"
         case .information: "设备信息"

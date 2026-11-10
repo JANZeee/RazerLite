@@ -137,7 +137,7 @@ private actor HeldBrightnessController: KeyboardBrightnessControlling {
             await reader.finish(); await task.value
             #expect(manager.keyboardBrightnessReadouts.isEmpty)
             #expect(!manager.isDeviceBusy(device.id))
-            #expect(manager.batteryTargets.isEmpty)
+            #expect(manager.batteryTargets.map(\.backend) == [.reclusaMini65USB])
             manager.stop()
         }
     }
@@ -211,16 +211,16 @@ private actor HeldBrightnessController: KeyboardBrightnessControlling {
     }
 
     #if DEBUG
-    @Test func offlineLightingUsesFakeServicesAndNeverAddsBatteryCapability() async throws {
+    @Test func offlineLightingUsesFakeServicesAndKeepsEvidenceSeparate() async throws {
         let session = try OfflineScenarioSession()
         await session.load(.keyboardLighting)
         let device = try #require(session.manager.devices.first)
         #expect(session.manager.keyboardBrightnessReadouts[device.id]?.percent == 60)
         #expect(session.manager.readSummary(for: device.id).state == .deviceResponse)
-        #expect(session.manager.batteryTargets.isEmpty && DeviceReadRegistry.backends(for: device).isEmpty)
+        #expect(session.manager.batteryTargets.map(\.backend) == [.reclusaMini65USB])
         let assessment = session.manager.adapterAssessment(for: device)
         #expect(assessment.capability("brightness")?.session.state == .succeeded)
-        #expect(assessment.capability("brightnessWrite")?.evidence.level == .simulationTested)
+        #expect(assessment.capability("brightnessWrite")?.evidence.level == .hardwareValidated)
         #expect(assessment.capability("rgb")?.implementation == .notImplemented)
         await session.manager.prepareBrightnessChange(for: device.id, percent: 25)
         let plan = try #require(session.manager.pendingBrightnessChanges[device.id])

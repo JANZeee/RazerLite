@@ -188,7 +188,7 @@ struct ReclusaBrightnessTests {
         }
     }
 
-    @Test func independentReadsShareSerialExecutorAndDoNotRegisterBatteryCapability() async {
+    @Test func independentLightingReadsShareSerialExecutorAndPowerUsesItsOwnBackend() async {
         let audit = ReclusaReadAudit()
         let reader = service(audit, replies: [fixtures.region, fixtures.brightness(100)])
         async let first = reader.read(fixtures.device())
@@ -196,7 +196,7 @@ struct ReclusaBrightnessTests {
         let values = await [first, second]
         #expect(values.allSatisfy { $0.hasValue })
         #expect(audit.snapshot().opens == 2 && audit.snapshot().closes == 2 && audit.snapshot().maximumActive == 1)
-        #expect(DeviceReadRegistry.backends(for: fixtures.device()).isEmpty)
+        #expect(DeviceReadRegistry.backends(for: fixtures.device()) == [.reclusaMini65USB])
         #expect(AdapterManifestCatalog.manifest(for: fixtures.device())?.feature("brightness")?.implementation == .implemented)
     }
 

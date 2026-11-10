@@ -4,6 +4,7 @@ public enum DeviceReadBackend: String, Codable, Sendable {
     case macOSBluetoothBattery
     case viperV4USB
     case blackWidowLowProfileUSB
+    case reclusaMini65USB
 }
 
 /// Executable read backends only. A name in RazerModelCatalog never enables a backend.
@@ -16,7 +17,7 @@ public enum DeviceReadRegistry {
             result.append(.macOSBluetoothBattery)
         }
         if ViperV4Adapter.controlInterface(in: device) != nil { result.append(.viperV4USB) }
-        if BlackWidowLowProfileAdapter.controlInterface(in: device) != nil { result.append(.blackWidowLowProfileUSB) }
+        if let route = KeyboardPowerRoute.resolve(device) { result.append(route.backend) }
         return result
     }
 }
