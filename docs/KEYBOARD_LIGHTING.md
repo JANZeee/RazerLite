@@ -11,7 +11,7 @@
 | [FerrisPulse 37616f8](https://github.com/Ferris-echo/FerrisPulse/blob/37616f806c5a50740b93c82569d1646d56fb61f7/src/Hardware/LightingHelper.cs) | 灯光入口只接受 Basilisk Ultimate 0086/0088，不能授权键盘通信。 |
 | [MacRazer 78f011d](https://github.com/SorcRR/MacRazer/blob/78f011d9d75427ea1b30435bc70c27a5aa905bd5/Sources/MacRazer/RazerAccessories.swift) | Cynosa 022A 有部分灯效和亮度真机注释；无 02F5。可参考按需读取、串行通信、灯效与亮度独立提交。 |
 | [OpenRazer 477f4d6](https://github.com/openrazer/openrazer/blob/477f4d6d3ab7e9deb6310d5bd3742560c5cbe80d/driver/razerkbd_driver.h) | 核查的 PID 表没有 02F5。Reclusa X 的 02E3 不是本机型号。 |
-| [OpenSynapse dd82dfe](https://github.com/A1mAssist/OpenSynapse/blob/dd82dfeb9aefacf0cf37836f45b8839015742663/CHROMA_SUPPORTED_DEVICES.md) | 包含 02F5 别名，但相关灯效尚待真机写入验证；其 Legacy 服务不提供亮度，不能据此判定硬件不支持。 |
+| [OpenSynapse dd82dfe](https://github.com/A1mAssist/OpenSynapse/blob/dd82dfeb9aefacf0cf37836f45b8839015742663/docs/CHROMA_SUPPORTED_DEVICES.md) | 包含 02F5 别名，但相关灯效尚待真机写入验证；其 Legacy 服务不提供亮度，不能据此判定硬件不支持。 |
 
 官方资源只作静态阅读，没有执行下载的 JavaScript，也没有复制其实现到项目。独立 Swift 编解码依据下列协议事实。
 
@@ -61,3 +61,11 @@ profile 1 是协议配置通道。没有证据保证它在所有板载槽/运行
 | 响应检查 | 长度、校验和、事务/命令、成功状态及 profile/region 回显通过 |
 
 当时只读阶段 232 项 Swift 测试通过，Release 构建及 CLI 被动/拒绝路径检查通过。原始诊断保留在忽略的 `build/keyboard-lighting-read.json`，不进入仓库。这个结果只验证该次连接的查询；未查询真实固件版本，不证明其他连接方式、长期稳定性、跨重启保存或实际灯光变化。
+
+## 安装版 50% 配置验收补充
+
+同日安装 0.12.0 / build 25 后，22:21:36 的原生界面手动读取仍为 100%。用户明确同意 100% → 50% 的单次写入及读回验证。恢复观察时确认页已结束，安装版界面显示 22:23:05 的 50% 读数和“已读回 50%”成功结果；没有重复点击确认或追加 SET。
+
+22:24:04 通过独立 CLI 查询取得 **profile 1 / region 5 / raw 127 / 50%**，无错误。记录为配置写入流程的界面结果和独立读回验证；未取得写入过程的原始报文抓包。原始复验 JSON 在忽略的 `build/phase012-brightness-verified.json`。
+
+用户对实际灯光是否变暗回答“暂时无法判断”，因此物理灯光效果、0% 关闭、跨重启保存和其他环境仍未验收；没有再修改亮度或自动恢复 100%。发布包内的历史证据清单保持构建时状态，这一补充记录不改变已安装程序。
