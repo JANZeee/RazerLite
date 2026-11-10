@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(mainWindowWillClose(_:)),
             name: NSWindow.willCloseNotification, object: nil)
         activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
-            object: nil, queue: .main) { _ in
+            object: nil, queue: .main) { [weak batteryAlerts] _ in
                 MainActor.assumeIsolated {
                     loginItem.refresh()
                     Task { @MainActor [weak batteryAlerts] in await batteryAlerts?.refreshAuthorization() }

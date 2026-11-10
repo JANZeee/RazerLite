@@ -691,6 +691,17 @@ public final class DeviceManager: ObservableObject {
               let ticket = beginRead(.battery, for: deviceID) else { return nil }
         defer { finishOperation(ticket) }
         batteryReadouts.removeValue(forKey: deviceID)
+        // This request supersedes every current battery source. Successful
+        // samples remain in history; unrelated DPI/charging data stays intact.
+        if let previous = mouseReadouts[deviceID] {
+            mouseReadouts[deviceID] = .init(deviceID: previous.deviceID, interfaceID: previous.interfaceID,
+                readAt: previous.readAt, batteryPercent: nil, dpi: previous.dpi,
+                issues: previous.issues.filter { $0.field != "battery" })
+        }
+        keyboardBatteryReadouts.removeValue(forKey: deviceID)
+        if keyboardChargingReadouts[deviceID] == nil { keyboardReadingInterfaces.removeValue(forKey: deviceID) }
+        systemBatteryReadings.removeValue(forKey: deviceID)
+        batteryReadingDevices.removeValue(forKey: deviceID)
         if origin == .automatic { hasRequestedAutomaticBattery = true }
         if target.backend == .macOSBluetoothBattery { hasRequestedSystemMetadata = true } else { hasRequestedQueries = true }
         record("\(origin == .manual ? "手动" : "定时")读取 \(device.product) 的电量；不查询 DPI 或修改设置。")
@@ -711,12 +722,23 @@ public final class DeviceManager: ObservableObject {
                         ?? value.failureKind.map { .init(field: "battery", message: $0.title, kind: $0) })
             }
         }
-        guard !Task.isCancelled, operations.isCurrent(ticket), let current = devices.first(where: { $0.id == deviceID }), result.matches(current) else { return nil }
-        batteryReadouts[deviceID] = result
+        guard !Task.isCancelled, operations.isCurrent(ticket), let current = devices.first(where: { $0.id == deviceID }) else { return nil }
+        let reading: BatteryReading
+        if result.matches(current), result.backend == target.backend {
+            reading = result
+        } else {
+            // The control session can survive a change to another HID interface.
+            // Record the rejected attempt so an older combined battery reading
+            // cannot become current again. Do not trust the result's value or time.
+            reading = .init(deviceID: current.id, interfaceIDs: current.interfaces.map(\.id).sorted(), backend: target.backend,
+                percent: nil, acquiredAt: Date(), source: target.backend == .macOSBluetoothBattery ? .systemCache : .device,
+                issue: .init(field: "battery", message: "本次电量响应与当前设备或接口不匹配，已丢弃；请重新读取。", kind: .protocolMismatch))
+        }
+        batteryReadouts[deviceID] = reading
         rememberSuccessfulReadings(for: current, fields: ["battery"])
-        batteryObservations.send(.init(target: target, deviceName: device.product, reading: result, origin: origin, simulation: isSimulation))
-        if let issue = result.issue { record("\(device.product) · 电量：\(issue.message)", isError: true, presentError: false) }
-        return result
+        batteryObservations.send(.init(target: target, deviceName: device.product, reading: reading, origin: origin, simulation: isSimulation))
+        if let issue = reading.issue { record("\(device.product) · 电量：\(issue.message)", isError: true, presentError: false) }
+        return reading
     }
 
     private func publishBattery(_ device: DeviceInfo, ticket: DeviceOperationTicket, percent: Int?, at: Date,

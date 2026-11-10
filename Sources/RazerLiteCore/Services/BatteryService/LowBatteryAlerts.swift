@@ -27,6 +27,7 @@ public struct LowBatteryNotice: Sendable {
     func authorization() async -> BatteryNotificationAuthorization
     func requestAuthorization() async throws
     func post(_ notice: LowBatteryNotice) async throws
+    func removePending(id: UUID)
     func removePending()
 }
 
@@ -98,7 +99,7 @@ struct LowBatteryAlertPolicy {
                 now: @escaping () -> Date = { .now }) {
         self.manager = manager; self.preferences = preferences; self.service = service; self.now = now
         threshold = preferences.lowBatteryThreshold
-        observations = manager.batteryObservations.sink { [weak self] in self?.receive($0) }
+        observations = manager.batteryObservations.sink { [weak self] in _ = self?.receive($0) }
         lifecycle = manager.objectWillChange.sink { [weak self] _ in
             guard let self, !self.reconcileQueued else { return }
             self.reconcileQueued = true
@@ -144,21 +145,29 @@ struct LowBatteryAlertPolicy {
             threshold = preferences.lowBatteryThreshold; policy.clear()
         }
     }
-    private func receive(_ observation: BatteryObservation) {
+    @discardableResult func receive(_ observation: BatteryObservation) -> Task<Void, Never>? {
         reconcile()
         guard !stopped, isEnabled, let manager, manager.batteryTargets.contains(observation.target),
-              let notice = policy.consider(observation, threshold: threshold, now: now()) else { return }
+              let notice = policy.consider(observation, threshold: threshold, now: now()) else { return nil }
         let token = generation
-        Task { @MainActor [weak self] in
+        return Task { @MainActor [weak self] in
             guard let self else { return }
             let status = await self.service.authorization()
-            guard self.valid(notice, token: token) else { return }
+            guard self.valid(notice, token: token) else {
+                self.policy.complete(notice, delivered: false)
+                return
+            }
             self.authorization = status
             guard status == .authorized else { self.policy.complete(notice, delivered: false); return }
             do {
                 try await self.service.post(notice)
                 if self.valid(notice, token: token) { self.policy.complete(notice, delivered: true) }
-                else { self.service.removePending() }
+                else {
+                    self.policy.complete(notice, delivered: false)
+                    // Only this stale request is revoked. Another device or
+                    // a newer low-battery episode can already be queued.
+                    self.service.removePending(id: notice.id)
+                }
             } catch {
                 guard token == self.generation else { return }
                 self.policy.complete(notice, delivered: false); self.issue = error.localizedDescription

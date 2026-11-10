@@ -5,8 +5,9 @@ import Testing
 @MainActor private final class SummaryDiscovery: HIDDiscovering {
     var onChange: (([HIDInterface], String) -> Void)?
     var onError: ((String) -> Void)?
+    var interfaces = [MouseReadServiceTests().controlInterface()]
     func start() { refresh() }
-    func refresh() { onChange?([MouseReadServiceTests().controlInterface()], "测试属性") }
+    func refresh() { onChange?(interfaces, "测试属性") }
     func stop() {}
 }
 
@@ -44,6 +45,40 @@ private actor SummaryBatteryReader: BatteryReadingService {
 
 @Suite(.timeLimit(.minutes(1))) @MainActor
 struct BatterySummaryLifecycleTests {
+    private func inputInterface() -> HIDInterface {
+        .init(id: 4, vendorID: 0x1532, productID: 0x00E6, product: "Viper fixture", manufacturer: nil,
+            transport: "USB", locationID: 0, versionNumber: 0x0101, usbDeviceID: 100,
+            usbInterfaceNumber: 0, usbDeviceRelease: 0x0101, primaryUsagePage: 1, primaryUsage: 2,
+            usages: [], maxInputReportSize: 8, maxOutputReportSize: 0, maxFeatureReportSize: 0,
+            registryClass: "Fixture", observedDrivers: [], isVirtual: false)
+    }
+
+    private func expectRejected(_ manager: DeviceManager, device: DeviceInfo, oldDPI: MouseDPIState?) throws {
+        let reading = try #require(manager.batteryReadouts[device.id])
+        #expect(!reading.isValid && reading.percent == nil && reading.matches(device))
+        #expect(reading.issue?.kind == .protocolMismatch && reading.issue?.message.contains("已丢弃") == true)
+        #expect(manager.batterySummary(for: device) == nil)
+        #expect(manager.mouseReadouts[device.id]?.dpi == oldDPI)
+        let session = try #require(manager.adapterAssessment(for: device).capability("battery")?.session)
+        #expect(session.state == .failed && session.value == nil && session.source == nil)
+        #expect(session.previous?.value == "35%")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(DiagnosticSnapshot.self, from: manager.snapshotData())
+        #expect(snapshot.batteryReadouts?[device.id]?.percent == nil)
+        #expect(snapshot.adapterAssessments?[device.id]?.capability("battery")?.session.state == .failed)
+    }
+
+    private func expectZeroRecovery(_ manager: DeviceManager, reader: SummaryBatteryReader, device: DeviceInfo) async {
+        let retry = Task { await manager.readBattery(for: device.id) }
+        await reader.waitForCall(2)
+        await reader.finish(.init(deviceID: device.id, interfaceIDs: device.interfaces.map(\.id).sorted(), backend: .viperV4USB,
+            percent: 0, acquiredAt: Date(timeIntervalSince1970: 3000), source: .device, issue: nil))
+        let reading = await retry.value
+        #expect(reading?.isValid == true && reading?.percent == 0)
+        #expect(manager.batterySummary(for: device)?.percent == 0)
+        #expect(manager.adapterAssessment(for: device).capability("battery")?.session.state == .succeeded)
+    }
+
     @Test func cancelledOrFailedBatteryRefreshCannotRestoreAnOlderCombinedReading() async throws {
         for cancelled in [false, true] {
             let reader = SummaryBatteryReader()
@@ -64,7 +99,7 @@ struct BatterySummaryLifecycleTests {
                 issue: cancelled ? nil : .init(field: "battery", message: "模拟超时", kind: .timeout)))
             await refresh.value
 
-            #expect(manager.mouseReadouts[device.id]?.batteryPercent == 35)
+            #expect(manager.mouseReadouts[device.id]?.batteryPercent == nil)
             #expect(manager.mouseReadouts[device.id]?.dpi == old.dpi)
             #expect(manager.batterySummary(for: device) == nil)
             let session = try #require(manager.adapterAssessment(for: device).capability("battery")?.session)
@@ -86,4 +121,110 @@ struct BatterySummaryLifecycleTests {
             manager.stop()
         }
     }
+
+    @Test func anotherHIDInterfaceArrivingDuringBatteryReadCannotRestoreOldBattery() async throws {
+        let discovery = SummaryDiscovery(), reader = SummaryBatteryReader()
+        let manager = DeviceManager(discovery: discovery, mouseReader: SummaryMouseReader(), batteryReader: reader)
+        manager.start()
+        defer { manager.stop() }
+        let device = try #require(manager.devices.first)
+        await manager.readMouseState(for: device.id)
+        let oldDPI = manager.mouseReadouts[device.id]?.dpi
+        let sessionID = manager.batteryTargets.first?.sessionID
+        let refresh = Task { await manager.readBattery(for: device.id) }
+        await reader.waitForCall(1)
+        discovery.interfaces.append(inputInterface())
+        discovery.refresh()
+        let current = try #require(manager.devices.first)
+        #expect(current.id == device.id && current.interfaces.count == 2)
+        #expect(manager.batteryTargets.first?.sessionID == sessionID) // Control route remains unchanged.
+        await reader.finish(.init(deviceID: device.id, interfaceIDs: device.interfaces.map(\.id).sorted(), backend: .viperV4USB,
+            percent: 88, acquiredAt: .distantFuture, source: .device, issue: nil))
+        let rejected = await refresh.value
+        #expect(rejected?.percent == nil && rejected?.acquiredAt != .distantFuture)
+        try expectRejected(manager, device: current, oldDPI: oldDPI)
+        // Another non-control interface change must not expose the old combined
+        // value when the failure record's full interface list no longer matches.
+        discovery.interfaces.removeAll { $0.id == 4 }
+        discovery.refresh()
+        let changedAgain = try #require(manager.devices.first)
+        #expect(manager.batterySummary(for: changedAgain) == nil)
+        #expect(manager.adapterAssessment(for: changedAgain).capability("battery")?.session.value == nil)
+        #expect(manager.mouseReadouts[device.id]?.batteryPercent == nil)
+        #expect(manager.lastSuccessfulReadings[device.id]?["battery"]?.value == "35%")
+        await expectZeroRecovery(manager, reader: reader, device: changedAgain)
+        #expect(manager.mouseReadouts[device.id]?.dpi == oldDPI)
+    }
+
+    @Test func incorrectDeviceInterfaceOrBackendBecomesAnExplicitFailure() async throws {
+        for mismatch in ["device", "interface", "backend"] {
+            let reader = SummaryBatteryReader()
+            let manager = DeviceManager(discovery: SummaryDiscovery(), mouseReader: SummaryMouseReader(), batteryReader: reader)
+            manager.start()
+            defer { manager.stop() }
+            let device = try #require(manager.devices.first)
+            await manager.readMouseState(for: device.id)
+            let oldDPI = manager.mouseReadouts[device.id]?.dpi
+            let refresh = Task { await manager.readBattery(for: device.id) }
+            await reader.waitForCall(1)
+            await reader.finish(.init(deviceID: mismatch == "device" ? "wrong-device" : device.id,
+                interfaceIDs: mismatch == "interface" ? [999] : device.interfaces.map(\.id).sorted(),
+                backend: mismatch == "backend" ? .blackWidowLowProfileUSB : .viperV4USB,
+                percent: 99, acquiredAt: .distantFuture, source: .device, issue: nil))
+            let rejected = await refresh.value
+            #expect(rejected?.percent == nil && rejected?.acquiredAt != .distantFuture)
+            try expectRejected(manager, device: device, oldDPI: oldDPI)
+            await expectZeroRecovery(manager, reader: reader, device: device)
+        }
+    }
+
+    @Test func invalidatedReadCannotPublishAMismatchFailureIntoTheNextSession() async throws {
+        for transition in ["reconnect", "wake", "restart"] {
+            let discovery = SummaryDiscovery(), reader = SummaryBatteryReader()
+            let manager = DeviceManager(discovery: discovery, mouseReader: SummaryMouseReader(), batteryReader: reader)
+            manager.start()
+            defer { manager.stop() }
+            let device = try #require(manager.devices.first)
+            await manager.readMouseState(for: device.id)
+            let oldSession = manager.batteryTargets.first?.sessionID
+            let refresh = Task { await manager.readBattery(for: device.id) }
+            await reader.waitForCall(1)
+            switch transition {
+            case "reconnect":
+                let original = discovery.interfaces
+                discovery.interfaces = []; discovery.refresh()
+                discovery.interfaces = original; discovery.refresh()
+            case "wake": manager.suspend(); manager.resume()
+            default: manager.stop(); manager.start()
+            }
+            #expect(manager.batteryTargets.first?.sessionID != oldSession)
+            await reader.finish(.init(deviceID: "wrong-device", interfaceIDs: [999], backend: .blackWidowLowProfileUSB,
+                percent: 99, acquiredAt: .distantFuture, source: .device, issue: nil))
+            #expect(await refresh.value == nil)
+            #expect(manager.batteryReadouts[device.id] == nil && manager.batterySummary(for: device) == nil)
+            #expect(manager.adapterAssessment(for: device).capability("battery")?.session.state == .notRead)
+            #expect(manager.lastSuccessfulReadings[device.id] == nil)
+            await expectZeroRecovery(manager, reader: reader, device: device)
+        }
+    }
+
+    #if DEBUG
+    @Test func independentReadSupersedesLegacyKeyboardAndSystemBatteryButKeepsCharging() async throws {
+        for scenario in [OfflineScenario.keyboard, .bluetooth] {
+            let session = try OfflineScenarioSession()
+            await session.load(scenario)
+            defer { session.manager.stop() }
+            let manager = session.manager, device = try #require(manager.devices.first)
+            let charging = manager.keyboardChargingReadouts[device.id]
+            if scenario == .keyboard { #expect(manager.keyboardBatteryReadouts[device.id] != nil) }
+            else { #expect(manager.systemBatteryReadings[device.id] != nil) }
+            let result = await manager.readBattery(for: device.id)
+            #expect(result?.isValid == true)
+            #expect(manager.keyboardBatteryReadouts[device.id] == nil)
+            #expect(manager.systemBatteryReadings[device.id] == nil)
+            #expect(manager.keyboardChargingReadouts[device.id] == charging)
+            #expect(manager.batterySummary(for: device)?.percent == result?.percent)
+        }
+    }
+    #endif
 }

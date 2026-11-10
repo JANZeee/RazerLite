@@ -28,6 +28,7 @@ import RazerLiteCore
         content.body = "设备读数 \(notice.percent)% · \(notice.acquiredAt.formatted(date: .omitted, time: .shortened))"
         try await center.add(.init(identifier: "battery-\(notice.id.uuidString)", content: content, trigger: nil))
     }
+    func removePending(id: UUID) { center.removePendingNotificationRequests(withIdentifiers: ["battery-\(id.uuidString)"]) }
     func removePending() { center.removeAllPendingNotificationRequests() }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .list]
@@ -40,5 +41,6 @@ import RazerLiteCore
     func authorization() async -> BatteryNotificationAuthorization { allowed ? .authorized : .notDetermined }
     func requestAuthorization() async throws { allowed = true }
     func post(_ notice: LowBatteryNotice) async throws {}
+    func removePending(id: UUID) {}
     func removePending() {}
 }
